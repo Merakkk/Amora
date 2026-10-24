@@ -14,6 +14,8 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 $targetArgs = @()
 $target = Join-Path $root "target"
 if ($TargetDir) {
+    # Build script installer berjalan dari folder installer\, jadi path harus absolut.
+    if (-not [System.IO.Path]::IsPathRooted($TargetDir)) { $TargetDir = Join-Path $root $TargetDir }
     $targetArgs = @("--target-dir", $TargetDir)
     $target = $TargetDir
 }
