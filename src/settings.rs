@@ -24,6 +24,10 @@ pub struct Settings {
     pub screenshot_to_shelf: bool,
     /// Riwayat clipboard (hanya di memori). Mati secara default demi privasi.
     pub clipboard: bool,
+    /// Tabel yang disalin dari chat AI dirapikan (bergaris, lebar kolom pas) sebelum ditempel.
+    pub tidy_tables: bool,
+    /// Tabel rapi memakai gaya laporan: Times New Roman 12.
+    pub table_report_style: bool,
     pub pomodoro: PomodoroCfg,
     pub water: WaterCfg,
 }
@@ -37,6 +41,8 @@ impl Default for Settings {
             minimal: false,
             screenshot_to_shelf: true,
             clipboard: false,
+            tidy_tables: true,
+            table_report_style: false,
             pomodoro: Default::default(),
             water: Default::default(),
         }

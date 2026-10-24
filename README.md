@@ -41,6 +41,14 @@ Hover the notch to open it; scroll or click the page names to switch pages.
 | **Clipboard** | Last 5 copied texts, in memory only. Off by default; skips password managers. |
 | **Settings** | Every option, applied instantly. |
 
+**Tidy tables for Google Docs / Word.** Copy a table from Claude, ChatGPT or Gemini — by
+selecting it or with a "copy table" button — and just press Ctrl+V in Google Docs or Word:
+Amora has already swapped it for a clean table with borders, a bold header row and column
+widths that fit the content (optionally Times New Roman 12 for reports). The plain text on
+the clipboard is left untouched, so pasting into a text editor or a chat still gives the same
+text. Spreadsheet tables (Excel, Google Sheets) and copies that include text outside the
+table are left as they are.
+
 In the closed notch:
 
 - **OSD** for volume and screen brightness.
