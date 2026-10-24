@@ -20,7 +20,6 @@ enum Toggle {
     Screenshot,
     Clipboard,
     TidyTables,
-    TableReport,
     WaterRemind,
 }
 
@@ -40,7 +39,7 @@ enum Hit {
     Step(Step, i32),
 }
 
-const LEFT: [Toggle; 10] = [
+const LEFT: [Toggle; 9] = [
     Toggle::Autostart,
     Toggle::Lyrics,
     Toggle::AutoHide,
@@ -49,7 +48,6 @@ const LEFT: [Toggle; 10] = [
     Toggle::Screenshot,
     Toggle::Clipboard,
     Toggle::TidyTables,
-    Toggle::TableReport,
     Toggle::WaterRemind,
 ];
 const RIGHT: [Step; 7] = [
@@ -72,7 +70,6 @@ fn toggle_label(t: Toggle) -> &'static str {
         Toggle::Screenshot => "Screenshot ke Shelf",
         Toggle::Clipboard => "Riwayat clipboard",
         Toggle::TidyTables => "Rapikan tabel yang disalin",
-        Toggle::TableReport => "Tabel gaya laporan (TNR 12)",
         Toggle::WaterRemind => "Pengingat minum",
     }
 }
@@ -87,7 +84,6 @@ fn toggle_get(s: &Settings, t: Toggle) -> bool {
         Toggle::Screenshot => s.screenshot_to_shelf,
         Toggle::Clipboard => s.clipboard,
         Toggle::TidyTables => s.tidy_tables,
-        Toggle::TableReport => s.table_report_style,
         Toggle::WaterRemind => s.water.remind,
     }
 }
@@ -102,7 +98,6 @@ fn toggle_flip(s: &mut Settings, t: Toggle) {
         Toggle::Screenshot => s.screenshot_to_shelf = !s.screenshot_to_shelf,
         Toggle::Clipboard => s.clipboard = !s.clipboard,
         Toggle::TidyTables => s.tidy_tables = !s.tidy_tables,
-        Toggle::TableReport => s.table_report_style = !s.table_report_style,
         Toggle::WaterRemind => s.water.remind = !s.water.remind,
     }
 }
