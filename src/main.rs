@@ -13,6 +13,7 @@ mod privacy;
 mod screenshots;
 mod settings;
 mod system;
+mod tables;
 mod time;
 mod tray;
 mod uninstall;
@@ -44,7 +45,7 @@ use settings::Settings;
 
 /// Ukuran kanvas jendela (DIP). Notch digambar di tengah atasnya; sisanya transparan.
 const CANVAS_W: f32 = 760.0;
-const CANVAS_H: f32 = 300.0;
+const CANVAS_H: f32 = 380.0;
 /// Tinggi baris nama halaman di bawah notch yang terbuka.
 const TAB_H: f32 = 30.0;
 const MIN_OPEN_W: f32 = 360.0;
@@ -71,6 +72,10 @@ const TIMER_DODGE: usize = 6;
 const TIMER_NET: usize = 7;
 const NET_SETTLE_MS: u32 = 2000;
 const LOW_BATTERY: [u32; 2] = [20, 10];
+/// Proses clipboard sedikit setelah berubah, supaya aplikasi penyalin selesai menulis
+/// dulu dan tidak terganggu oleh Amora yang ikut membuka clipboard.
+const TIMER_CLIP: usize = 8;
+const CLIP_SETTLE_MS: u32 = 150;
 const DODGE_MS: u32 = 80;
 /// Area (DIP) di sekitar notch: kursor di sini berarti mengarah ke tab di belakang notch.
 const DODGE_MARGIN_X: f32 = 6.0;
@@ -551,7 +556,8 @@ impl App {
     fn apply_settings(&mut self) {
         let (clip, auto_hide) = {
             let s = self.settings.borrow();
-            (s.clipboard, s.auto_hide)
+            // Clipboard dipantau untuk riwayat atau untuk merapikan tabel.
+            (s.clipboard || s.tidy_tables, s.auto_hide)
         };
         if clip != self.clip_listening {
             clipboard::listen(self.hwnd, clip);
@@ -735,7 +741,24 @@ impl App {
                     self.render();
                 }
             }
-            WM_CLIPBOARDUPDATE => self.broadcast(Event::ClipboardChanged),
+            WM_CLIPBOARDUPDATE => unsafe {
+                SetTimer(self.hwnd, TIMER_CLIP, CLIP_SETTLE_MS, None);
+            },
+            WM_TIMER if wp.0 == TIMER_CLIP => {
+                unsafe {
+                    let _ = KillTimer(self.hwnd, TIMER_CLIP);
+                }
+                let (tidy, report) = {
+                    let s = self.settings.borrow();
+                    (s.tidy_tables, s.table_report_style)
+                };
+                if tidy {
+                    if let Some((rows, cols)) = clipboard::tidy_table(self.hwnd, report) {
+                        self.notice("📋", "Tabel siap ditempel", format!("{rows} × {cols}"));
+                    }
+                }
+                self.broadcast(Event::ClipboardChanged);
+            }
             screenshots::WM_APP_SCREENSHOT => {
                 let paths = screenshots::take();
                 let on = self.settings.borrow().screenshot_to_shelf;
@@ -955,6 +978,23 @@ fn main() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("--probe-lyrics") {
         return lyrics::probe(&args[2], &args[3], args[4].parse().unwrap_or(0.0));
     }
+    // Untuk pengembangan: `amora --probe-table <file CF_HTML atau teks>` menampilkan hasil urai.
+    if args.get(1).map(String::as_str) == Some("--probe-table") {
+        let bytes = std::fs::read(&args[2]).unwrap_or_default();
+        let rows = tables::cf_html_fragment(&bytes)
+            .and_then(|f| tables::from_html(&f))
+            .or_else(|| tables::from_markdown(String::from_utf8_lossy(&bytes).trim_start_matches('\u{feff}')));
+        match rows {
+            Some(r) => {
+                for row in &r {
+                    println!("{} {:?}", if row.head { "J" } else { " " }, row.cells);
+                }
+                println!("lebar kolom %: {:?}", tables::column_widths(&r));
+            }
+            None => println!("bukan tabel"),
+        }
+        return Ok(());
+    }
     // Dipanggil dari Settings → Apps (lihat installer).
     if args.get(1).map(String::as_str) == Some("--uninstall") {
         let has = |f: &str| args.iter().any(|a| a == f);
@@ -1057,7 +1097,7 @@ fn main() -> Result<()> {
             battery_warned: 101,
             net: network::current(),
             settings: settings.clone(),
-            clip_listening: settings.borrow().clipboard,
+            clip_listening: settings.borrow().clipboard || settings.borrow().tidy_tables,
             in_use: privacy::InUse::default(),
             auto_hide: settings.borrow().auto_hide,
             covered: false,
@@ -1088,7 +1128,10 @@ fn main() -> Result<()> {
         privacy::watch(hwnd);
         with_app(|a| a.in_use = privacy::current());
         screenshots::watch(hwnd);
-        clipboard::listen(hwnd, settings.borrow().clipboard);
+        {
+            let s = settings.borrow();
+            clipboard::listen(hwnd, s.clipboard || s.tidy_tables);
+        }
         occlusion::install(hwnd);
         with_app(|a| a.recheck_covered());
         let target: IDropTarget = DropTarget.into();

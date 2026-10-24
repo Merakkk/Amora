@@ -120,6 +120,79 @@ fn write_text(hwnd: HWND, s: &str) -> bool {
     }
 }
 
+/// Isi format clipboard `fmt` sebagai byte (clipboard sudah dibuka).
+unsafe fn read_bytes(fmt: u32) -> Option<Vec<u8>> {
+    if IsClipboardFormatAvailable(fmt).is_err() {
+        return None;
+    }
+    let h = GetClipboardData(fmt).ok()?;
+    let g = HGLOBAL(h.0);
+    let p = GlobalLock(g) as *const u8;
+    if p.is_null() {
+        return None;
+    }
+    let bytes = std::slice::from_raw_parts(p, GlobalSize(g)).to_vec();
+    let _ = GlobalUnlock(g);
+    Some(bytes)
+}
+
+unsafe fn put(fmt: u32, bytes: &[u8]) -> bool {
+    let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, bytes.len()) else { return false };
+    let p = GlobalLock(h) as *mut u8;
+    if p.is_null() {
+        return false;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+    let _ = GlobalUnlock(h);
+    SetClipboardData(fmt, HANDLE(h.0)).is_ok()
+}
+
+/// Bila yang baru disalin adalah tabel (HTML dari blok/tombol Copy, atau Markdown),
+/// ganti versi HTML-nya dengan tabel rapi bergaris. Teks biasanya tidak diubah, jadi
+/// menempel ke editor teks tetap menghasilkan teks yang sama.
+/// Mengembalikan (jumlah baris, jumlah kolom) bila tabel dirapikan.
+pub fn tidy_table(hwnd: HWND, report: bool) -> Option<(usize, usize)> {
+    if !open(hwnd) {
+        return None;
+    }
+    let html_fmt = unsafe { RegisterClipboardFormatW(w!("HTML Format")) };
+    let (html, text) = unsafe {
+        let skip = excluded();
+        let html = if skip { None } else { read_bytes(html_fmt) };
+        let text = if skip { None } else { read_bytes(CF_UNICODETEXT.0 as u32) };
+        let _ = CloseClipboard();
+        (html, text)
+    };
+    // Teks UTF-16 diakhiri NUL.
+    let text = text.map(|b| {
+        let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+        String::from_utf16_lossy(&w)
+    });
+    let rows = html
+        .as_deref()
+        .and_then(crate::tables::cf_html_fragment)
+        .and_then(|f| crate::tables::from_html(&f))
+        .or_else(|| text.as_deref().and_then(crate::tables::from_markdown))?;
+    let cf = crate::tables::cf_html(&crate::tables::to_html(&rows, report));
+
+    if !open(hwnd) {
+        return None;
+    }
+    let ok = unsafe {
+        let mut ok = EmptyClipboard().is_ok();
+        let mut cf0 = cf;
+        cf0.push(0);
+        ok &= put(html_fmt, &cf0);
+        if let Some(t) = &text {
+            let wide: Vec<u8> = t.encode_utf16().chain(Some(0)).flat_map(u16::to_le_bytes).collect();
+            ok &= put(CF_UNICODETEXT.0 as u32, &wide);
+        }
+        let _ = CloseClipboard();
+        ok
+    };
+    ok.then(|| (rows.len(), rows[0].cells.len()))
+}
+
 /// Mulai/berhenti menerima WM_CLIPBOARDUPDATE.
 pub fn listen(hwnd: HWND, on: bool) {
     unsafe {

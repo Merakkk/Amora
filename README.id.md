@@ -35,6 +35,8 @@ Untuk pengembangan:
 - `AMORA_MASCOT=mata|tidur|halo` memaksa keadaan maskot.
 - `AMORA_FORCE_OPEN=1` membuat notch selalu terbuka; `AMORA_PAGE=Fokus` memilih halamannya.
 - `cargo run -- --probe-lyrics "<judul>" "<artis>" <durasi-detik>` menguji pencarian lirik.
+- `amora --probe-table <file>` menampilkan hasil urai tabel dari file CF_HTML atau teks Markdown.
+- `cargo run --example clip_put -- <fragmen.html> <teks.txt>` mengisi clipboard seperti browser, untuk menguji "Rapikan tabel".
 - `amora --probe-system` mencetak status jaringan, output audio, dan bahasa keyboard.
 - `amora --autostart on|off|status` menguji opsi mulai bersama Windows.
 - `cargo test` menjalankan tes pembersih judul dan parser LRC.
@@ -53,6 +55,7 @@ Untuk pengembangan:
 - `src/screenshots.rs` — memantau folder Screenshots
 - `src/occlusion.rs` — deteksi jendela di posisi notch (event jendela Windows)
 - `src/system.rs` — event volume (Core Audio) dan kecerahan (power setting)
+- `src/tables.rs` — urai tabel (HTML/Markdown) dan susun ulang jadi tabel rapi
 - `src/time.rs` — waktu lokal untuk pengingat
 - `src/uninstall.rs` — `amora --uninstall`, dipanggil dari Settings → Apps
 - `installer/` — AmoraSetup.exe (membawa amora.exe di dalamnya)
@@ -84,12 +87,14 @@ Untuk pengembangan:
 - [x] Halaman Setelan di notch (semua pilihan, langsung berlaku)
 - [x] Lirik: cari ulang, geser waktu per lagu, animasi pergantian baris, baris panjang dibungkus
 - [x] Ikon aplikasi, installer tanpa admin, uninstall dari Settings → Apps
+- [x] Rapikan tabel yang disalin dari chat AI (diblok atau tombol Copy tabel): Ctrl+V di Google Docs/Word langsung jadi tabel bergaris, judul tebal, lebar kolom pas; opsi gaya laporan (Times New Roman 12)
 - [x] Riwayat clipboard 5 teks terakhir (hanya di memori, mati default, lewati password manager)
 
 ## Setelan
 
 Semua bisa diubah di halaman **Setelan** pada notch. Tersimpan di `%LOCALAPPDATA%\Amora\settings.json`:
 
+- `tidy_tables`: rapikan tabel yang disalin (default `true`); `table_report_style`: Times New Roman 12 (default `false`)
 - `clipboard`: riwayat clipboard (default `false`, juga lewat menu tray)
 - `screenshot_to_shelf`: screenshot baru masuk Shelf (default `true`)
 - `mascot`, `minimal`: juga bisa diubah lewat menu tray
