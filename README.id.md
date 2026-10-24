@@ -87,14 +87,14 @@ Untuk pengembangan:
 - [x] Halaman Setelan di notch (semua pilihan, langsung berlaku)
 - [x] Lirik: cari ulang, geser waktu per lagu, animasi pergantian baris, baris panjang dibungkus
 - [x] Ikon aplikasi, installer tanpa admin, uninstall dari Settings → Apps
-- [x] Rapikan tabel yang disalin dari chat AI (diblok atau tombol Copy tabel): Ctrl+V di Google Docs/Word langsung jadi tabel bergaris, judul tebal, lebar kolom pas; opsi gaya laporan (Times New Roman 12)
+- [x] Rapikan tabel yang disalin dari chat AI (diblok atau tombol Copy tabel): Ctrl+V di Google Docs/Word langsung jadi tabel bergaris, judul tebal, lebar kolom pas, huruf mengikuti dokumen
 - [x] Riwayat clipboard 5 teks terakhir (hanya di memori, mati default, lewati password manager)
 
 ## Setelan
 
 Semua bisa diubah di halaman **Setelan** pada notch. Tersimpan di `%LOCALAPPDATA%\Amora\settings.json`:
 
-- `tidy_tables`: rapikan tabel yang disalin (default `true`); `table_report_style`: Times New Roman 12 (default `false`)
+- `tidy_tables`: rapikan tabel yang disalin (default `true`)
 - `clipboard`: riwayat clipboard (default `false`, juga lewat menu tray)
 - `screenshot_to_shelf`: screenshot baru masuk Shelf (default `true`)
 - `mascot`, `minimal`: juga bisa diubah lewat menu tray

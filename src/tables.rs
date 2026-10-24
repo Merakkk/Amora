@@ -238,11 +238,10 @@ fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-/// Susun tabel HTML yang rapi. `report`: gaya laporan (Times New Roman 12).
-pub fn to_html(rows: &[Row], report: bool) -> String {
+/// Susun tabel HTML yang rapi. Huruf tidak diatur, jadi mengikuti dokumen tujuan.
+pub fn to_html(rows: &[Row]) -> String {
     let pct = column_widths(rows);
-    let font = if report { "font-family:'Times New Roman',serif;font-size:12pt;" } else { "" };
-    let cell = format!("border:1pt solid #000000;padding:3pt 5pt;vertical-align:top;color:#000000;{font}");
+    let cell = "border:1pt solid #000000;padding:3pt 5pt;vertical-align:top;color:#000000;";
     let mut out = String::from(r#"<table data-amora="1" border="1" style="border-collapse:collapse;width:100%;"><colgroup>"#);
     for p in &pct {
         out.push_str(&format!(r#"<col width="{p}%" style="width:{p}%;">"#));
@@ -338,7 +337,7 @@ mod tests {
 
     #[test]
     fn cf_html_roundtrip() {
-        let html = to_html(&from_markdown(CHATGPT_MD).unwrap(), false);
+        let html = to_html(&from_markdown(CHATGPT_MD).unwrap());
         let cf = cf_html(&html);
         assert_eq!(cf_html_fragment(&cf).unwrap(), html);
         assert!(html.contains("border:1pt solid") && html.contains("data-amora"));

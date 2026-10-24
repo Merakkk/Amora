@@ -151,7 +151,7 @@ unsafe fn put(fmt: u32, bytes: &[u8]) -> bool {
 /// ganti versi HTML-nya dengan tabel rapi bergaris. Teks biasanya tidak diubah, jadi
 /// menempel ke editor teks tetap menghasilkan teks yang sama.
 /// Mengembalikan (jumlah baris, jumlah kolom) bila tabel dirapikan.
-pub fn tidy_table(hwnd: HWND, report: bool) -> Option<(usize, usize)> {
+pub fn tidy_table(hwnd: HWND) -> Option<(usize, usize)> {
     if !open(hwnd) {
         return None;
     }
@@ -173,7 +173,7 @@ pub fn tidy_table(hwnd: HWND, report: bool) -> Option<(usize, usize)> {
         .and_then(crate::tables::cf_html_fragment)
         .and_then(|f| crate::tables::from_html(&f))
         .or_else(|| text.as_deref().and_then(crate::tables::from_markdown))?;
-    let cf = crate::tables::cf_html(&crate::tables::to_html(&rows, report));
+    let cf = crate::tables::cf_html(&crate::tables::to_html(&rows));
 
     if !open(hwnd) {
         return None;

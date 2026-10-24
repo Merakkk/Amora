@@ -748,12 +748,9 @@ impl App {
                 unsafe {
                     let _ = KillTimer(self.hwnd, TIMER_CLIP);
                 }
-                let (tidy, report) = {
-                    let s = self.settings.borrow();
-                    (s.tidy_tables, s.table_report_style)
-                };
+                let tidy = self.settings.borrow().tidy_tables;
                 if tidy {
-                    if let Some((rows, cols)) = clipboard::tidy_table(self.hwnd, report) {
+                    if let Some((rows, cols)) = clipboard::tidy_table(self.hwnd) {
                         self.notice("📋", "Tabel siap ditempel", format!("{rows} × {cols}"));
                     }
                 }
