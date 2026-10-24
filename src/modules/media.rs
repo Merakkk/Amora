@@ -5,6 +5,7 @@ use windows::Win32::Graphics::Direct2D::ID2D1Bitmap;
 use windows::Win32::Graphics::Imaging::{IWICBitmap, IWICImagingFactory};
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::{Event, Module, Poll};
@@ -23,6 +24,12 @@ const ROW_H: f32 = 22.0;
 const LINE_ANIM: Duration = Duration::from_millis(240);
 const OFFSET_STEP: f64 = 0.5;
 const OFFSETS_FILE: &str = "lyric_offsets.json";
+/// Lirik di notch tertutup yang tidak muat: diam sebentar, lalu bergeser sekali sampai ujung.
+const MARQUEE_PAUSE: f32 = 0.8;
+/// Kecepatan geser (DIP/detik); dipercepat bila perlu supaya selesai sebelum baris berikutnya.
+const MARQUEE_SPEED: f32 = 30.0;
+const MARQUEE_MAX_SPEED: f32 = 140.0;
+const MARQUEE_FRAME_MS: u32 = 40;
 
 enum LyricsCtl {
     Research,
@@ -52,6 +59,31 @@ pub struct MediaModule {
     last_line: Option<usize>,
     line_anim: Option<Instant>,
     sleep: Option<Sleep>,
+    marquee: Option<Marquee>,
+    /// Lagu palsu untuk pengembangan (`AMORA_DEMO_LYRIC`); abaikan SMTC.
+    demo: bool,
+}
+
+/// Baris lirik panjang yang sedang digeser di notch tertutup.
+struct Marquee {
+    line: usize,
+    text: String,
+    start: Instant,
+    /// Lebar yang tidak muat (DIP).
+    over: f32,
+    speed: f32,
+}
+
+impl Marquee {
+    fn offset(&self) -> f32 {
+        let t = (self.start.elapsed().as_secs_f32() - MARQUEE_PAUSE).max(0.0);
+        (t * self.speed).min(self.over)
+    }
+
+    /// Masih bergeser; setelah sampai ujung tidak perlu digambar ulang lagi.
+    fn moving(&self) -> bool {
+        self.start.elapsed().as_secs_f32() < MARQUEE_PAUSE + self.over / self.speed
+    }
 }
 
 /// Sleep timer: musik dijeda saat `end`, volume memudar selama `FADE` terakhir.
@@ -134,7 +166,7 @@ impl MediaModule {
         lyrics: LyricsService,
         settings: SharedSettings,
     ) -> Self {
-        Self {
+        let mut m = Self {
             shared,
             cmd,
             wic,
@@ -152,7 +184,27 @@ impl MediaModule {
             last_line: None,
             line_anim: None,
             sleep: None,
+            marquee: None,
+            demo: false,
+        };
+        // Untuk pengembangan: `AMORA_DEMO_LYRIC="<baris>"` memutar lagu palsu dengan baris
+        // lirik itu (8 detik), lalu satu baris pendek. Untuk menguji tampilan lirik tanpa musik.
+        if let Ok(text) = std::env::var("AMORA_DEMO_LYRIC") {
+            m.demo = true;
+            m.info = Some(MediaInfo {
+                title: "Lagu Uji".into(),
+                artist: "Amora".into(),
+                playing: true,
+                position: 0.0,
+                duration: 200.0,
+                at: Instant::now(),
+                thumb: None,
+                thumb_id: 0,
+            });
+            let lines = vec![Line { t: 0.0, text }, Line { t: 8.0, text: "Baris pendek".into() }];
+            m.lyrics_state = Some(State::Ready(Arc::new(Lyrics::Synced(lines))));
         }
+        m
     }
 
     fn lyrics_on(&self) -> bool {
@@ -375,15 +427,34 @@ impl Module for MediaModule {
             g.fill_rrect(Rect::new(x + i as f32 * 5.0, cy - h / 2.0, 3.0, h), 1.5, color);
         }
         // Baris lirik saat ini, di tengah notch yang tertutup.
-        if self.lyrics_on() {
-            if let Some(lines) = self.synced() {
-                if let Some(i) = current_line(lines, info.position_now() + self.offset()) {
-                    let t = if lines[i].text.is_empty() { "♪" } else { &lines[i].text };
-                    let tr = Rect::new(r.x + 40.0, r.y, r.w - 80.0, r.h);
-                    g.text(t, tr, 12.5, 600, WHITE, Align::Center);
-                }
-            }
+        let line = self.lyrics_on().then(|| self.synced()).flatten().and_then(|lines| {
+            let i = current_line(lines, info.position_now() + self.offset())?;
+            let text = if lines[i].text.is_empty() { "♪".to_string() } else { lines[i].text.clone() };
+            let dur = lines.get(i + 1).map_or(0.0, |n| (n.t - lines[i].t) as f32);
+            Some((i, text, dur))
+        });
+        let Some((i, text, dur)) = line else {
+            self.marquee = None;
+            return;
+        };
+        let tr = Rect::new(r.x + 40.0, r.y, r.w - 80.0, r.h);
+        let tw = g.text_width(&text, 12.5, 600);
+        if tw <= tr.w {
+            self.marquee = None;
+            g.text(&text, tr, 12.5, 600, WHITE, Align::Center);
+            return;
         }
+        if self.marquee.as_ref().is_none_or(|m| m.line != i || m.text != text) {
+            let over = tw - tr.w;
+            // Usahakan sampai ujung sebelum baris berikutnya mulai.
+            let time = dur * 0.8 - MARQUEE_PAUSE;
+            let speed = if time > 0.1 { (over / time).clamp(MARQUEE_SPEED, MARQUEE_MAX_SPEED) } else { MARQUEE_SPEED };
+            self.marquee = Some(Marquee { line: i, text: text.clone(), start: Instant::now(), over, speed });
+        }
+        let dx = self.marquee.as_ref().map_or(0.0, Marquee::offset);
+        g.push_clip(tr);
+        g.text(&text, Rect::new(tr.x - dx, tr.y, tw + 8.0, tr.h), 12.5, 600, WHITE, Align::Left);
+        g.pop_clip();
     }
 
     fn draw_expanded(&mut self, g: &mut Gfx, r: Rect) {
@@ -492,6 +563,9 @@ impl Module for MediaModule {
     }
 
     fn on_event(&mut self, e: &Event) {
+        if self.demo {
+            return;
+        }
         match e {
             Event::MediaChanged => {
                 self.info = self.shared.lock().unwrap().clone();
@@ -566,6 +640,10 @@ impl Module for MediaModule {
         }
         if expanded && self.sleep.is_some() {
             return Some(500);
+        }
+        // Lirik panjang sedang bergeser; berhenti menggambar begitu sampai ujung.
+        if !expanded && self.marquee.as_ref().is_some_and(Marquee::moving) {
+            return Some(MARQUEE_FRAME_MS);
         }
         let info = self.info.as_ref().filter(|i| i.playing)?;
         // Bangun tepat saat baris lirik berikutnya mulai.

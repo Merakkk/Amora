@@ -85,16 +85,28 @@ pub fn data_dir() -> Option<PathBuf> {
 }
 
 /// Baca file JSON di folder data; `None` bila belum ada atau rusak.
+/// File yang rusak disisihkan jadi `<nama>.rusak` supaya tidak langsung tertimpa.
 pub fn load_json<T: for<'de> Deserialize<'de>>(name: &str) -> Option<T> {
-    let s = std::fs::read_to_string(data_dir()?.join(name)).ok()?;
-    serde_json::from_str(&s).ok()
+    let path = data_dir()?.join(name);
+    let s = std::fs::read_to_string(&path).ok()?;
+    // File yang diedit tangan (Notepad, PowerShell) bisa diawali BOM.
+    let v = serde_json::from_str(s.trim_start_matches('\u{feff}')).ok();
+    if v.is_none() {
+        let _ = std::fs::rename(&path, path.with_extension("rusak"));
+    }
+    v
 }
 
+/// Tulis ke file sementara lalu ganti nama, supaya file lama tetap utuh bila
+/// penulisan terputus (listrik mati, Amora dimatikan paksa).
 pub fn save_json<T: Serialize>(name: &str, v: &T) {
     let Some(dir) = data_dir() else { return };
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(s) = serde_json::to_string_pretty(v) {
-        let _ = std::fs::write(dir.join(name), s);
+        let tmp = dir.join(format!("{name}.tmp"));
+        if std::fs::write(&tmp, s).is_ok() {
+            let _ = std::fs::rename(&tmp, dir.join(name));
+        }
     }
 }
 

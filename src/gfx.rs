@@ -249,6 +249,31 @@ impl Gfx {
         }
     }
 
+    /// "Telinga" cekung di sudut atas notch: kotak `r`×`r` dikurangi seperempat lingkaran,
+    /// menempel di tepi atas pada `x` (tepi kiri notch bila `left`, tepi kanan bila tidak).
+    pub fn ear(&self, x: f32, r: f32, left: bool, c: Color) {
+        let Some(b) = self.brush(c) else { return };
+        let d = if left { -1.0 } else { 1.0 };
+        unsafe {
+            let Ok(geo) = self.d2d.CreatePathGeometry() else { return };
+            let Ok(sink) = geo.Open() else { return };
+            sink.BeginFigure(D2D_POINT_2F { x: x + d * r, y: 0.0 }, D2D1_FIGURE_BEGIN_FILLED);
+            sink.AddLine(D2D_POINT_2F { x, y: 0.0 });
+            sink.AddLine(D2D_POINT_2F { x, y: r });
+            sink.AddArc(&D2D1_ARC_SEGMENT {
+                point: D2D_POINT_2F { x: x + d * r, y: 0.0 },
+                size: D2D_SIZE_F { width: r, height: r },
+                rotationAngle: 0.0,
+                sweepDirection: if left { D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE } else { D2D1_SWEEP_DIRECTION_CLOCKWISE },
+                arcSize: D2D1_ARC_SIZE_SMALL,
+            });
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            if sink.Close().is_ok() {
+                self.rt.FillGeometry(&geo, &b, None);
+            }
+        }
+    }
+
     fn format(&mut self, size: f32, weight: u16, align: Align, font: Font) -> Option<IDWriteTextFormat> {
         let key = ((size * 10.0) as u32, weight, align, font);
         if let Some(f) = self.formats.get(&key) {
@@ -312,6 +337,20 @@ impl Gfx {
                 return 1;
             }
             m.lineCount.max(1)
+        }
+    }
+
+    /// Lebar teks satu baris (DIP), untuk tahu apakah perlu digeser (marquee).
+    pub fn text_width(&mut self, s: &str, size: f32, weight: u16) -> f32 {
+        let Some(f) = self.format(size, weight, Align::Left, Font::Line) else { return 0.0 };
+        let wide: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let Ok(layout) = self.dw.CreateTextLayout(&wide, &f, 10_000.0, 100.0) else { return 0.0 };
+            let mut m = DWRITE_TEXT_METRICS::default();
+            if layout.GetMetrics(&mut m).is_err() {
+                return 0.0;
+            }
+            m.width
         }
     }
 

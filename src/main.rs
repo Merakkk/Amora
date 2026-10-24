@@ -2,6 +2,7 @@
 
 mod anim;
 mod autostart;
+mod crashlog;
 mod gfx;
 mod keyboard;
 mod lyrics;
@@ -20,6 +21,7 @@ mod uninstall;
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use windows::core::*;
@@ -78,12 +80,18 @@ const TIMER_CLIP: usize = 8;
 const CLIP_SETTLE_MS: u32 = 150;
 const DODGE_MS: u32 = 80;
 /// Area (DIP) di sekitar notch: kursor di sini berarti mengarah ke tab di belakang notch.
-const DODGE_MARGIN_X: f32 = 6.0;
+const DODGE_MARGIN_X: f32 = EAR_R + 4.0;
 const DODGE_MARGIN_Y: f32 = 4.0;
 /// Kursor ditempel di tepi paling atas layar (piksel) = ingin membuka notch, bukan tab.
 const TOP_EDGE_PX: i32 = 1;
 /// Lama notch terbuka sendiri saat ada pengingat.
 const ALERT_MS: u32 = 7000;
+/// Kursor harus diam sebentar di atas notch sebelum ia terbuka, supaya tidak
+/// terbuka sendiri saat kursor hanya lewat.
+const TIMER_HOVER: usize = 9;
+const HOVER_DELAY_MS: u32 = 150;
+/// Jari-jari "telinga" cekung yang menyambungkan notch ke tepi atas layar.
+const EAR_R: f32 = 8.0;
 
 struct App {
     hwnd: HWND,
@@ -95,6 +103,8 @@ struct App {
     /// Halaman yang tampil saat notch terbuka.
     page: usize,
     hover: bool,
+    /// Kursor baru masuk; notch dibuka bila masih di sana setelah `HOVER_DELAY_MS`.
+    hover_pending: bool,
     /// Notch dibuka sendiri oleh pengingat.
     alert: bool,
     /// Keyboard sedang diarahkan ke halaman (mis. mengetik tugas).
@@ -326,7 +336,9 @@ impl App {
             let m = mi.rcMonitor;
             self.origin = POINT { x: m.left + (m.right - m.left - pw) / 2, y: m.top };
             if dev_instance() {
-                self.origin.x += pw * 3 / 4;
+                // `AMORA_DEV_X=<piksel>` menggeser instance uji ke tempat lain (layar sempit).
+                let dx = std::env::var("AMORA_DEV_X").ok().and_then(|v| v.parse().ok());
+                self.origin.x += dx.unwrap_or(pw * 3 / 4);
             }
             if pw != self.g.px_w || ph != self.g.px_h || scale != self.g.scale {
                 let _ = self.g.resize(pw, ph, scale);
@@ -352,6 +364,13 @@ impl App {
         // Sudut atas menempel di tepi layar, hanya sudut bawah yang membulat.
         let radius = (island.h * 0.5).min(22.0);
         self.g.fill_rrect(Rect::new(island.x, -radius, island.w, island.h + radius), radius, BLACK);
+        // Telinga cekung di kiri-kanan, supaya notch tampak tumbuh dari tepi layar.
+        // Mengecil bersama notch (garis tipis, bersembunyi).
+        let ear = (island.h * 0.35).min(EAR_R);
+        if ear >= 1.0 {
+            self.g.ear(island.x, ear, true, BLACK);
+            self.g.ear(island.x + island.w, ear, false, BLACK);
+        }
 
         let (_, ch) = self.compact_size();
         let (_, eh) = self.open_size();
@@ -470,6 +489,11 @@ impl App {
 
     fn start_hover(&mut self) {
         self.hover = true;
+        self.track_leave();
+    }
+
+    /// Minta WM_MOUSELEAVE saat kursor meninggalkan notch.
+    fn track_leave(&self) {
         let mut t = TRACKMOUSEEVENT {
             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
             dwFlags: TME_LEAVE,
@@ -590,13 +614,15 @@ impl App {
                 }
             }
             WM_MOUSEMOVE => {
-                if !self.hover {
-                    if !self.is_open() && self.modules[self.current].tab().is_some() {
-                        // Buka di halaman yang sedang tampil di notch tertutup.
-                        self.page = self.current;
-                    }
+                if self.is_open() && !self.hover {
+                    // Sudah terbuka (pengingat, mengetik): langsung anggap hover.
+                    self.hover_pending = false;
                     self.start_hover();
                     self.retarget();
+                } else if !self.hover && !self.hover_pending {
+                    self.hover_pending = true;
+                    self.track_leave();
+                    unsafe { SetTimer(self.hwnd, TIMER_HOVER, HOVER_DELAY_MS, None) };
                 }
                 // Tombol kiri ditahan dan digeser: mulai seret file keluar.
                 if let Some((px, py)) = self.press {
@@ -620,6 +646,11 @@ impl App {
                 self.press = Some((x, y));
             }
             WM_MOUSELEAVE => {
+                if std::mem::take(&mut self.hover_pending) {
+                    unsafe {
+                        let _ = KillTimer(self.hwnd, TIMER_HOVER);
+                    }
+                }
                 self.hover = false;
                 self.alert = false;
                 self.retarget();
@@ -702,6 +733,20 @@ impl App {
                 self.recheck_covered();
             }
             WM_TIMER if wp.0 == TIMER_DODGE => self.check_dodge(),
+            WM_TIMER if wp.0 == TIMER_HOVER => {
+                unsafe {
+                    let _ = KillTimer(self.hwnd, TIMER_HOVER);
+                }
+                // Masih di atas notch (WM_MOUSELEAVE belum datang) dan tidak sedang minggir.
+                if std::mem::take(&mut self.hover_pending) && !self.hover && !self.dodge {
+                    if !self.is_open() && self.modules[self.current].tab().is_some() {
+                        // Buka di halaman yang sedang tampil di notch tertutup.
+                        self.page = self.current;
+                    }
+                    self.start_hover();
+                    self.retarget();
+                }
+            }
             WM_TIMER if wp.0 == TIMER_ALERT => {
                 unsafe {
                     let _ = KillTimer(self.hwnd, TIMER_ALERT);
@@ -782,8 +827,12 @@ impl App {
             }
             WM_DPICHANGED | WM_DISPLAYCHANGE => {
                 self.place();
+                // Posisi notch di layar berubah: cek ulang jendela di belakangnya.
+                self.recheck_covered();
+                self.retarget();
                 self.render();
             }
+            shelf::WM_APP_THUMB if self.is_open() => self.render(),
             _ => return None,
         }
         Some(LRESULT(0))
@@ -792,11 +841,14 @@ impl App {
 
 /// Untuk pengembangan: `AMORA_FORCE_OPEN=1` membuat notch selalu terbuka.
 fn dev_instance() -> bool {
-    std::env::var_os("AMORA_DEV").is_some()
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("AMORA_DEV").is_some())
 }
 
+/// Dibaca sekali saja: `is_open()` dipanggil berkali-kali di setiap frame.
 fn force_open() -> bool {
-    std::env::var_os("AMORA_FORCE_OPEN").is_some()
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("AMORA_FORCE_OPEN").is_some())
 }
 
 const CMD_EXIT: usize = 1;
@@ -970,6 +1022,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
 }
 
 fn main() -> Result<()> {
+    crashlog::install();
     // Untuk pengembangan: `cargo run -- --probe-lyrics "<judul>" "<artis>" <durasi>`
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--probe-lyrics") {
@@ -991,6 +1044,10 @@ fn main() -> Result<()> {
             None => println!("bukan tabel"),
         }
         return Ok(());
+    }
+    // Untuk pengembangan: `amora --crash-test` memastikan panic tercatat di log.txt.
+    if args.get(1).map(String::as_str) == Some("--crash-test") {
+        panic!("uji log crash");
     }
     // Dipanggil dari Settings → Apps (lihat installer).
     if args.get(1).map(String::as_str) == Some("--uninstall") {
@@ -1067,7 +1124,7 @@ fn main() -> Result<()> {
             Box::new(Water::new(settings.clone())),
             Box::new(Todo::new()),
             Box::new(Schedule::new()),
-            Box::new(Shelf::new(g.wic.clone())),
+            Box::new(Shelf::new(g.wic.clone(), hwnd)),
             Box::new(Clipboard::new(hwnd, settings.clone())),
             Box::new(SettingsPage::new(settings.clone())),
             Box::new(ClockModule::new(settings.clone())),
@@ -1081,6 +1138,7 @@ fn main() -> Result<()> {
             current: 0,
             page: 0,
             hover: false,
+            hover_pending: false,
             alert: false,
             editing: false,
             tab_hits: Vec::new(),

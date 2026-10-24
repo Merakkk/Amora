@@ -31,6 +31,8 @@ Untuk pengembangan:
 
 - `AmoraSetup.exe /S` memasang tanpa pertanyaan; `amora --uninstall --quiet [--wipe]` menghapus tanpa pertanyaan.
 - `AMORA_DEV=1` menjalankan instance uji di samping Amora yang sedang jalan.
+- `AMORA_DEV_X=<piksel>` menggeser instance uji (bawaan: ke kanan), berguna di layar sempit.
+- `AMORA_DEMO_LYRIC="<baris>"` memutar lagu palsu dengan baris lirik itu, untuk menguji tampilan lirik tanpa musik.
 - `cargo run --example volume_ping` menggeser volume 1% lalu mengembalikannya, untuk menguji OSD.
 - `AMORA_MASCOT=mata|tidur|halo` memaksa keadaan maskot.
 - `AMORA_FORCE_OPEN=1` membuat notch selalu terbuka; `AMORA_PAGE=Fokus` memilih halamannya.
@@ -39,6 +41,7 @@ Untuk pengembangan:
 - `cargo run --example clip_put -- <fragmen.html> <teks.txt>` mengisi clipboard seperti browser, untuk menguji "Rapikan tabel".
 - `amora --probe-system` mencetak status jaringan, output audio, dan bahasa keyboard.
 - `amora --autostart on|off|status` menguji opsi mulai bersama Windows.
+- `amora --crash-test` memicu panic untuk memastikan tercatat di `%LOCALAPPDATA%\Amora\log.txt`.
 - `cargo test` menjalankan tes pembersih judul dan parser LRC.
 
 ## Struktur
