@@ -50,7 +50,11 @@ fn parse_day(word: &str) -> Option<u8> {
     if w.chars().count() < 3 {
         return None;
     }
-    HARI.iter().position(|h| h.to_lowercase().starts_with(w)).map(|i| i as u8)
+    const DAYS: [&str; 7] = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    HARI.iter()
+        .position(|h| h.to_lowercase().starts_with(w))
+        .or_else(|| DAYS.iter().position(|d| d.starts_with(w)))
+        .map(|i| i as u8)
 }
 
 /// "Senin 08:00-09:40 Basis Data @R301" → Class. `today` dipakai bila hari tidak ditulis.
@@ -335,6 +339,12 @@ mod tests {
     #[test]
     fn no_day_means_today() {
         assert_eq!(parse_class("10:00-11:40 Statistika @Lab 2", 3), Some(c(3, "10:00", "11:40", "Statistika", "Lab 2")));
+    }
+
+    #[test]
+    fn english_day_names() {
+        assert_eq!(parse_class("Mon 08:00-09:40 Databases @R301", 5), Some(c(1, "08:00", "09:40", "Databases", "R301")));
+        assert_eq!(parse_class("thu 13.00-15.30 Networks", 1), Some(c(4, "13:00", "15:30", "Networks", "")));
     }
 
     #[test]

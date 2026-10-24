@@ -1,98 +1,87 @@
 # Amora
 
-Notch hidup di tepi atas layar Windows. Ditulis dengan Rust + Direct2D, tanpa web engine.
+**English** · [Bahasa Indonesia](README.id.md)
 
-## Memasang
+<img src="assets/amora.png" width="96" align="right" alt="Amora icon">
 
-Jalankan `AmoraSetup.exe`. Amora dipasang untuk akun Anda saja di `%LOCALAPPDATA%\Programs\Amora`
-(tanpa hak admin), muncul di Start Menu, langsung berjalan, dan ikut mulai bersama Windows.
-Hapus kapan saja dari **Settings → Apps → Amora**.
+A living notch for the top edge of Windows. It shows your music with synced lyrics,
+a focus timer, water reminders, to-dos, your class schedule, a file shelf and more —
+then quietly gets out of the way.
 
-Membangun installer sendiri (butuh Rust + Visual Studio Build Tools dengan Windows SDK):
+Native Rust + Direct2D, no web engine: about 30–40 MB of RAM and no CPU while idle.
 
-```
-powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
-```
+## Install
 
-Hasilnya `dist\AmoraSetup.exe`, beserta SHA-256-nya. Bila `target\release\amora.exe` sedang
-berjalan dan terkunci, tambahkan `-TargetDir target-dev`.
+Download `AmoraSetup.exe` from [Releases](../../releases) and run it.
 
-## Menjalankan dari kode
+- Installs for your account only in `%LOCALAPPDATA%\Programs\Amora` — no admin rights.
+- Adds a Start Menu shortcut, starts with Windows, and launches right away.
+- Uninstall anytime from **Settings → Apps → Amora** (you choose whether to keep your data).
+
+The installer is not code-signed yet, so Windows SmartScreen may warn you.
+Click **More info → Run anyway**. Each release lists the SHA-256 of `AmoraSetup.exe`
+so you can verify the file.
+
+Requires Windows 10 (1809+) or Windows 11, 64-bit.
+
+## Features
+
+Hover the notch to open it; scroll or click the page names to switch pages.
+
+| Page | What it does |
+|---|---|
+| **Music** | Any player (Spotify, YouTube in the browser, …): cover art, play/pause/skip, seek. |
+| | **Smart lyrics** from [LRCLIB](https://lrclib.net), synced line by line. YouTube-style titles (`Artist - Song (Official Video)`, VEVO / "- Topic" channels) are cleaned up so lyrics are found even for music videos. Re-search, per-song timing offset, click a line to jump. |
+| | Sleep timer (15/30/60 min): fades the volume out, pauses, restores the volume. |
+| **Focus** | Pomodoro timer; the countdown stays visible in the closed notch. |
+| **Water** | Log what you drink, hourly chart, reminders during your active hours. |
+| **To-do** | Type straight into the notch; end with `@14:30` for a reminder. |
+| **Schedule** | Weekly classes: `Mon 08:00-09:40 Databases @R301` (English or Indonesian day names). Countdown before class, reminder 10 minutes ahead. |
+| **Shelf** | Drop files on the notch, drag them out into a chat or folder (copied, never moved). New screenshots land here automatically. |
+| **Clipboard** | Last 5 copied texts, in memory only. Off by default; skips password managers. |
+| **Settings** | Every option, applied instantly. |
+
+In the closed notch:
+
+- **OSD** for volume and screen brightness.
+- **Notifications** for Caps Lock, keyboard language, charger / low battery, Wi-Fi / internet, audio output (e.g. headphones).
+- **Privacy dots**: orange while an app uses the microphone, green for the camera.
+- **Mascot**: when the PC has been idle, the clock steps aside and a pair of eyes appears; they doze off and say hi when you're back.
+- **Minimal mode**: the closed notch becomes a thin line for laptops with a thick top bezel.
+- **Gets out of the way**: when a tab or window sits behind the notch and your cursor heads there, the notch moves aside. Push the cursor against the very top edge to open the notch.
+
+Right-click the notch or the tray icon for the menu.
+
+## Privacy
+
+No accounts, no analytics. Tasks, schedule, water log, shelf and settings stay in
+`%LOCALAPPDATA%\Amora`. The only network traffic is to LRCLIB when lyrics are turned on
+(off by default): song title, artist and duration. The keyboard hook only reacts to
+Caps Lock and the language-switch keys; nothing you type is recorded.
+
+## Building
+
+Needs Rust (MSVC toolchain) and Visual Studio Build Tools with the Windows SDK.
 
 ```
 cargo run --release
 ```
 
-Klik kanan notch atau klik ikon Amora di tray untuk menu: **Mulai bersama Windows**, **Maskot Amora**, **Notch minimal**, **Riwayat clipboard**, **Tentang Amora**, **Keluar**.
+Build the installer (`dist\AmoraSetup.exe` plus its SHA-256):
 
-Untuk pengembangan:
+```
+powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
+```
 
-- `AmoraSetup.exe /S` memasang tanpa pertanyaan; `amora --uninstall --quiet [--wipe]` menghapus tanpa pertanyaan.
-- `AMORA_DEV=1` menjalankan instance uji di samping Amora yang sedang jalan.
-- `cargo run --example volume_ping` menggeser volume 1% lalu mengembalikannya, untuk menguji OSD.
-- `AMORA_MASCOT=mata|tidur|halo` memaksa keadaan maskot.
-- `AMORA_FORCE_OPEN=1` membuat notch selalu terbuka; `AMORA_PAGE=Fokus` memilih halamannya.
-- `cargo run -- --probe-lyrics "<judul>" "<artis>" <durasi-detik>` menguji pencarian lirik.
-- `amora --probe-system` mencetak status jaringan, output audio, dan bahasa keyboard.
-- `amora --autostart on|off|status` menguji opsi mulai bersama Windows.
-- `cargo test` menjalankan tes pembersih judul dan parser LRC.
+`cargo test` runs the unit tests (title cleaning, LRC parsing, schedule and reminder parsing, …).
+Developer flags are listed in [README.id.md](README.id.md#menjalankan-dari-kode).
 
-## Struktur
+## Inspiration
 
-- `src/main.rs` — jendela, hover, animasi, pemilihan modul
-- `src/gfx.rs` — gambar (Direct2D ke jendela layered; area transparan tembus klik)
-- `src/media.rs` — membaca musik dari Windows (SMTC) di thread terpisah
-- `src/lyrics/` — pencarian lirik LRCLIB (`matcher.rs`: pembersih judul + parser LRC)
-- `src/tray.rs` — ikon tray (digambar di kode) dan event-nya
-- `src/autostart.rs` — mulai bersama Windows lewat `HKCU\...\Run`
-- `src/keyboard.rs` — Caps Lock dan bahasa (hook hanya bereaksi pada tombol itu)
-- `src/network.rs` — status internet/Wi-Fi
-- `src/privacy.rs` — pemakaian mic/kamera dari registry ConsentStore (event, bukan polling)
-- `src/screenshots.rs` — memantau folder Screenshots
-- `src/occlusion.rs` — deteksi jendela di posisi notch (event jendela Windows)
-- `src/system.rs` — event volume (Core Audio) dan kecerahan (power setting)
-- `src/time.rs` — waktu lokal untuk pengingat
-- `src/uninstall.rs` — `amora --uninstall`, dipanggil dari Settings → Apps
-- `installer/` — AmoraSetup.exe (membawa amora.exe di dalamnya)
-- `assets/amora.ico` — ikon, dibuat oleh `tools/make_icon.py`
-- `src/settings.rs` — setelan di `%LOCALAPPDATA%\Amora\settings.json`
-- `src/modules/` — satu file per fitur; implementasikan trait `Module` lalu daftarkan di `main.rs`
+Inspired by [Nusa](https://rama2555.github.io/nusa/) for Windows and the macOS notch apps
+such as [boring.notch](https://github.com/TheBoredTeam/boring.notch). Amora is an
+independent implementation; no code was copied from those projects.
 
-## Status
+## License
 
-- [x] Notch, hover melebar, animasi pegas
-- [x] Jam (saat tidak ada musik)
-- [x] Musik: judul, artis, sampul, putar/jeda/lompat, progress + seek
-- [x] Lirik pintar: LRCLIB, judul YouTube/VEVO/Topic dibersihkan, cache di `%LOCALAPPDATA%\Amora\lyrics`
-- [x] Ikon tray + menu, mulai bersama Windows
-- [x] Halaman (Musik · Fokus · Minum · To-do · Jadwal · Shelf · Clipboard): klik nama halaman atau scroll
-- [x] Fokus (Pomodoro), sisa waktu tampil di notch tertutup
-- [x] Minum: catat, grafik per jam, pengingat di jam aktif
-- [x] To-do: ketik di notch, `@14:30` untuk pengingat
-- [x] Shelf: seret file ke notch, klik untuk membuka, seret keluar (salin, tidak memindahkan)
-- [x] OSD volume (ikut ganti perangkat audio) dan kecerahan layar laptop
-- [x] Minggir saat ada jendela di belakang notch dan kursor mengarah ke sana (mis. tab browser); tempel kursor ke tepi atas layar untuk membuka notch
-- [x] Notifikasi: Caps Lock, bahasa keyboard, charger/baterai lemah, internet/Wi-Fi, ganti output audio (headphone)
-- [x] Maskot: mata muncul saat PC diam 1 menit, tidur setelah 2 menit, menyapa saat kembali
-- [x] Mode notch minimal: garis tipis, tetap muncul penuh untuk lirik dan notifikasi
-- [x] Indikator mic (oranye) / kamera (hijau) + notifikasi nama aplikasinya
-- [x] Screenshot baru otomatis masuk Shelf
-- [x] Sleep timer musik 15/30/60 menit, volume memudar 10 detik lalu musik dijeda
-- [x] Jadwal kuliah mingguan: ketik `Senin 08:00-09:40 Basis Data @R301`, pengingat 10 menit sebelum kelas, hitung mundur di notch tertutup
-- [x] Halaman Setelan di notch (semua pilihan, langsung berlaku)
-- [x] Lirik: cari ulang, geser waktu per lagu, animasi pergantian baris, baris panjang dibungkus
-- [x] Ikon aplikasi, installer tanpa admin, uninstall dari Settings → Apps
-- [x] Riwayat clipboard 5 teks terakhir (hanya di memori, mati default, lewati password manager)
-
-## Setelan
-
-Semua bisa diubah di halaman **Setelan** pada notch. Tersimpan di `%LOCALAPPDATA%\Amora\settings.json`:
-
-- `clipboard`: riwayat clipboard (default `false`, juga lewat menu tray)
-- `screenshot_to_shelf`: screenshot baru masuk Shelf (default `true`)
-- `mascot`, `minimal`: juga bisa diubah lewat menu tray
-- `auto_hide`: notch minggir saat kursor mengarah ke jendela di belakangnya (default `true`)
-- `pomodoro`: `focus_min`, `short_break_min`, `long_break_min`, `rounds`
-- `water`: `goal_ml`, `sip_ml`, `remind`, `interval_min`, `start_hour`, `end_hour`
-
-Data: `water.json` (hari ini), `todo.json`, `schedule.json`, `lyric_offsets.json`, `shelf.json` (lokasi file saja), dan cache lirik di `lyrics\`.
+[MIT](LICENSE)
