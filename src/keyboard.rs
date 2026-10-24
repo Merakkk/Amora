@@ -2,7 +2,7 @@
 //! bereaksi pada tombol Caps Lock serta tombol pengganti bahasa (Shift, Alt, Ctrl,
 //! Win, Spasi) saat dilepas. Tombol lain langsung diteruskan dan tidak pernah dicatat.
 
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Globalization::*;
@@ -19,6 +19,9 @@ const LANG_DELAY_MS: u32 = 150;
 
 static TARGET: AtomicIsize = AtomicIsize::new(0);
 static LAST_LAYOUT: AtomicIsize = AtomicIsize::new(0);
+/// Id timer pengecekan bahasa yang sedang berjalan (0 = tidak ada). Dipakai ulang supaya
+/// mengetik spasi beruntun hanya menunda satu timer, bukan membuat timer baru tiap tombol.
+static LANG_TIMER: AtomicUsize = AtomicUsize::new(0);
 
 fn post(msg: u32, wp: usize, lp: isize) {
     unsafe {
@@ -35,6 +38,7 @@ fn foreground_layout() -> isize {
 
 unsafe extern "system" fn check_language(_: HWND, _: u32, id: usize, _: u32) {
     let _ = KillTimer(None, id);
+    LANG_TIMER.store(0, Ordering::Relaxed);
     let hkl = foreground_layout();
     if hkl != 0 && LAST_LAYOUT.swap(hkl, Ordering::Relaxed) != hkl {
         post(WM_APP_LANG, 0, hkl);
@@ -52,7 +56,9 @@ unsafe extern "system" fn hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
             vk,
             VK_SPACE | VK_LSHIFT | VK_RSHIFT | VK_LMENU | VK_RMENU | VK_LCONTROL | VK_RCONTROL | VK_LWIN | VK_RWIN
         ) {
-            SetTimer(None, 0, LANG_DELAY_MS, Some(check_language));
+            // Id yang sama = timer lama diulang dari awal.
+            let id = SetTimer(None, LANG_TIMER.load(Ordering::Relaxed), LANG_DELAY_MS, Some(check_language));
+            LANG_TIMER.store(id, Ordering::Relaxed);
         }
     }
     CallNextHookEx(None, code, wp, lp)

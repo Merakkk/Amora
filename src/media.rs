@@ -81,7 +81,7 @@ pub fn spawn(hwnd: HWND, notify_msg: u32) -> (Shared, MediaHandle) {
                 let _ = PostMessageW(HWND(hwnd_raw as _), notify_msg, WPARAM(0), LPARAM(0));
             };
             if let Err(e) = run(&shared, tx, rx, &notify) {
-                eprintln!("media: {e}");
+                crate::crashlog::write(&format!("media: {e}"));
             }
         });
     }

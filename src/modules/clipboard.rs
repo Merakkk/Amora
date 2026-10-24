@@ -147,6 +147,19 @@ unsafe fn put(fmt: u32, bytes: &[u8]) -> bool {
     SetClipboardData(fmt, HANDLE(h.0)).is_ok()
 }
 
+/// Tabel yang perlu dirapikan dari isi clipboard (CF_HTML dan teks), `None` bila bukan
+/// tabel atau sudah dirapikan.
+fn table_to_tidy(html: Option<&[u8]>, text: Option<&str>) -> Option<Vec<crate::tables::Row>> {
+    // Sudah dirapikan (termasuk hasil tulisan kita sendiri barusan). Tanpa ini teks
+    // Markdown-nya akan dirapikan lagi, ditulis lagi, dan begitu seterusnya.
+    if html.is_some_and(|h| h.windows(10).any(|w| w == b"data-amora")) {
+        return None;
+    }
+    html.and_then(crate::tables::cf_html_fragment)
+        .and_then(|f| crate::tables::from_html(&f))
+        .or_else(|| text.and_then(crate::tables::from_markdown))
+}
+
 /// Bila yang baru disalin adalah tabel (HTML dari blok/tombol Copy, atau Markdown),
 /// ganti versi HTML-nya dengan tabel rapi bergaris. Teks biasanya tidak diubah, jadi
 /// menempel ke editor teks tetap menghasilkan teks yang sama.
@@ -168,11 +181,7 @@ pub fn tidy_table(hwnd: HWND) -> Option<(usize, usize)> {
         let w: Vec<u16> = b.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
         String::from_utf16_lossy(&w)
     });
-    let rows = html
-        .as_deref()
-        .and_then(crate::tables::cf_html_fragment)
-        .and_then(|f| crate::tables::from_html(&f))
-        .or_else(|| text.as_deref().and_then(crate::tables::from_markdown))?;
+    let rows = table_to_tidy(html.as_deref(), text.as_deref())?;
     let cf = crate::tables::cf_html(&crate::tables::to_html(&rows));
 
     if !open(hwnd) {
@@ -300,5 +309,23 @@ impl Module for Clipboard {
         // Hilangkan tanda "Disalin" tepat waktu.
         let (_, t) = self.copied?;
         (expanded && t.elapsed() < COPIED_FOR).then(|| (COPIED_FOR - t.elapsed()).as_millis() as u32 + 10)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::table_to_tidy;
+    use crate::tables::{cf_html, to_html};
+
+    #[test]
+    fn tidy_once_not_forever() {
+        let md = "| A | B |
+|---|---|
+| 1 | 2 |
+| 3 | 4 |";
+        let rows = table_to_tidy(None, Some(md)).expect("Markdown dirapikan");
+        // Hasil tulisan Amora sendiri (HTML rapi + teks Markdown yang sama) tidak dirapikan lagi.
+        let ours = cf_html(&to_html(&rows));
+        assert!(table_to_tidy(Some(&ours), Some(md)).is_none());
     }
 }

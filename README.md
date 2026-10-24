@@ -62,8 +62,8 @@ Right-click the notch or the tray icon for the menu.
 
 ## Privacy
 
-No accounts, no analytics. Tasks, schedule, water log, shelf and settings stay in
-`%LOCALAPPDATA%\Amora`. The only network traffic is to LRCLIB when lyrics are turned on
+No accounts, no analytics. Tasks, schedule, water log, shelf, settings and a local crash
+log (`log.txt`, never sent anywhere) stay in `%LOCALAPPDATA%\Amora`. The only network traffic is to LRCLIB when lyrics are turned on
 (off by default): song title, artist and duration. The keyboard hook only reacts to
 Caps Lock and the language-switch keys; nothing you type is recorded.
 

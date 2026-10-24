@@ -2,6 +2,7 @@
 //! email, atau folder lain. Yang disimpan hanya lokasi file, bukan salinannya.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 use windows::core::HSTRING;
 use windows::Win32::Foundation::*;
@@ -11,7 +12,7 @@ use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::Ole::{ReleaseStgMedium, CF_HDROP};
 use windows::Win32::UI::Shell::*;
-use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, SW_SHOWNORMAL, WM_APP};
 
 use super::Module;
 use crate::gfx::{Align, Color, Gfx, Rect, DIM, FAINT, WHITE};
@@ -21,13 +22,31 @@ const FILE: &str = "shelf.json";
 const ACCENT: Color = Color(0.35, 0.72, 1.0, 1.0);
 const MAX_TILES: usize = 5;
 const TILE_W: f32 = 76.0;
+/// Thumbnail selesai dibuat di thread latar; gambar ulang bila Shelf sedang terlihat.
+pub const WM_APP_THUMB: u32 = WM_APP + 11;
+
+/// Piksel PBGRA hasil thumbnail, dikirim dari thread latar.
+struct Pixels {
+    w: u32,
+    h: u32,
+    data: Vec<u8>,
+}
+
+enum Thumb {
+    /// Belum diminta.
+    None,
+    /// Sedang dibuat di thread latar.
+    Loading,
+    /// `None` bila Explorer tidak punya thumbnail untuk file ini.
+    Ready(Option<IWICBitmap>),
+}
 
 struct Item {
     path: PathBuf,
     name: String,
     size: String,
     /// Thumbnail dimuat saat pertama kali digambar.
-    thumb_src: Option<Option<IWICBitmap>>,
+    thumb_src: Thumb,
     thumb: Option<(u64, ID2D1Bitmap)>,
 }
 
@@ -39,6 +58,9 @@ enum Hit {
 
 pub struct Shelf {
     wic: IWICImagingFactory,
+    hwnd: HWND,
+    thumbs_tx: Sender<(PathBuf, Option<Pixels>)>,
+    thumbs_rx: Receiver<(PathBuf, Option<Pixels>)>,
     items: Vec<Item>,
     /// File sedang diseret di atas notch.
     hover_drop: bool,
@@ -65,11 +87,12 @@ fn size_label(p: &Path) -> String {
 fn item(path: PathBuf) -> Item {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let size = size_label(&path);
-    Item { path, name, size, thumb_src: None, thumb: None }
+    Item { path, name, size, thumb_src: Thumb::None, thumb: None }
 }
 
 /// Thumbnail dari Explorer (foto/video asli, atau ikon jenis file).
-fn thumbnail(wic: &IWICImagingFactory, path: &Path) -> Option<IWICBitmap> {
+/// Bisa lambat (video, file di jaringan), jadi dijalankan di thread latar.
+fn thumbnail(wic: &IWICImagingFactory, path: &Path) -> Option<Pixels> {
     unsafe {
         let f: IShellItemImageFactory =
             SHCreateItemFromParsingName(&HSTRING::from(path.as_os_str()), None).ok()?;
@@ -80,8 +103,31 @@ fn thumbnail(wic: &IWICImagingFactory, path: &Path) -> Option<IWICBitmap> {
         let conv = wic.CreateFormatConverter().ok()?;
         conv.Initialize(&src, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)
             .ok()?;
-        wic.CreateBitmapFromSource(&conv, WICBitmapCacheOnLoad).ok()
+        let (mut w, mut h) = (0u32, 0u32);
+        conv.GetSize(&mut w, &mut h).ok()?;
+        let mut data = vec![0u8; (w * h * 4) as usize];
+        conv.CopyPixels(std::ptr::null(), w * 4, &mut data).ok()?;
+        Some(Pixels { w, h, data })
     }
+}
+
+/// Buat thumbnail `paths` satu per satu di thread latar, kirim hasilnya ke `tx`.
+fn load_thumbs(paths: Vec<PathBuf>, tx: Sender<(PathBuf, Option<Pixels>)>, hwnd: HWND) {
+    let hwnd_raw = hwnd.0 as isize;
+    std::thread::spawn(move || unsafe {
+        // Shell (IShellItemImageFactory) butuh apartemen STA.
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let wic: Option<IWICImagingFactory> = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER).ok();
+        for p in paths {
+            let px = wic.as_ref().and_then(|w| thumbnail(w, &p));
+            if tx.send((p, px)).is_err() {
+                break;
+            }
+            let _ = PostMessageW(HWND(hwnd_raw as _), WM_APP_THUMB, WPARAM(0), LPARAM(0));
+        }
+        drop(wic);
+        CoUninitialize();
+    });
 }
 
 fn hdrop_format() -> FORMATETC {
@@ -131,10 +177,37 @@ pub fn drag_out(hwnd: HWND, path: &Path) -> bool {
 }
 
 impl Shelf {
-    pub fn new(wic: IWICImagingFactory) -> Self {
+    pub fn new(wic: IWICImagingFactory, hwnd: HWND) -> Self {
         let paths: Vec<PathBuf> = load_json(FILE).unwrap_or_default();
         let items = paths.into_iter().filter(|p| p.exists()).map(item).collect();
-        Self { wic, items, hover_drop: false, hits: Vec::new() }
+        let (thumbs_tx, thumbs_rx) = channel();
+        Self { wic, hwnd, thumbs_tx, thumbs_rx, items, hover_drop: false, hits: Vec::new() }
+    }
+
+    /// Ambil thumbnail yang sudah jadi, dan minta yang belum untuk ubin yang terlihat.
+    fn update_thumbs(&mut self) {
+        while let Ok((path, px)) = self.thumbs_rx.try_recv() {
+            let src = px.and_then(|p| unsafe {
+                self.wic
+                    .CreateBitmapFromMemory(p.w, p.h, &GUID_WICPixelFormat32bppPBGRA, p.w * 4, &p.data)
+                    .ok()
+            });
+            if let Some(it) = self.items.iter_mut().find(|i| i.path == path) {
+                it.thumb_src = Thumb::Ready(src);
+                it.thumb = None;
+            }
+        }
+        let mut want = Vec::new();
+        for i in self.visible() {
+            let it = &mut self.items[i];
+            if matches!(it.thumb_src, Thumb::None) {
+                it.thumb_src = Thumb::Loading;
+                want.push(it.path.clone());
+            }
+        }
+        if !want.is_empty() {
+            load_thumbs(want, self.thumbs_tx.clone(), self.hwnd);
+        }
     }
 
     fn save(&self) {
@@ -190,14 +263,12 @@ impl Module for Shelf {
         g.text("Bersihkan", clear, 12.0, 400, DIM, Align::Right);
         self.hits.push((clear, Hit::Clear));
 
+        self.update_thumbs();
         for (k, i) in self.visible().into_iter().enumerate() {
             let x = zone.x + k as f32 * TILE_W;
             let tile = Rect::new(x, zone.y, TILE_W - 6.0, zone.h);
             let it = &mut self.items[i];
-            if it.thumb_src.is_none() {
-                it.thumb_src = Some(thumbnail(&self.wic, &it.path));
-            }
-            if let Some(Some(src)) = &it.thumb_src {
+            if let Thumb::Ready(Some(src)) = &it.thumb_src {
                 if it.thumb.as_ref().map(|t| t.0) != Some(g.generation) {
                     it.thumb = g.bitmap(src).map(|b| (g.generation, b));
                 }
