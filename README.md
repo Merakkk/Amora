@@ -1,95 +1,43 @@
-# Amora
+## Amora 0.3.0
 
-**English** · [Bahasa Indonesia](README.id.md)
+### Important fixes
+- **Table tidy no longer loops.** In 0.2.0, copying a Markdown table made Amora rewrite the clipboard over and over (about 7 times a second) until you copied something else. Tables are now tidied once.
+- **Safer data.** Settings, to-dos, schedule and Shelf are saved safely: the old file stays intact if Amora stops in the middle of a save. A damaged file is set aside as `.rusak` instead of being replaced with defaults. Files edited in Notepad (with a BOM) are now read correctly.
+- **Crash log.** If Amora stops unexpectedly, the cause is written to `%LOCALAPPDATA%\Amora\log.txt`. It stays on your computer and is never sent anywhere.
+- Changing screen resolution or scaling is now picked up right away by "move aside for tabs behind the notch".
 
-<img src="assets/amora.png" width="96" align="right" alt="Amora icon">
+### Polish
+- The notch no longer opens when the cursor merely passes over it; the cursor has to rest for a moment (150 ms).
+- Long lyric lines in the closed notch scroll slowly to the end instead of being cut off with "…". Each line scrolls only once, so CPU use stays low.
+- Shelf thumbnails load in the background, so the notch no longer stutters on large files or files on a network drive.
+- The top corners of the notch now curve inward and blend into the top edge of the screen.
 
-A living notch for the top edge of Windows. It shows your music with synced lyrics,
-a focus timer, water reminders, to-dos, your class schedule, a file shelf and more —
-then quietly gets out of the way.
+**Install / update:** download `AmoraSetup.exe` below and run it. Updating keeps your settings, tasks and schedule. No admin rights needed.
 
-Native Rust + Direct2D, no web engine: about 30–40 MB of RAM and no CPU while idle.
+The installer isn't code-signed yet, so SmartScreen may warn you: **More info → Run anyway**.
 
-## Install
+SHA-256 of `AmoraSetup.exe`:
+`e8251424f4001d4534b41417b07b07c6481990fe81f39b3f3a5138e6120fc118`
 
-Download `AmoraSetup.exe` from [Releases](../../releases) and run it.
+---
 
-- Installs for your account only in `%LOCALAPPDATA%\Programs\Amora` — no admin rights.
-- Adds a Start Menu shortcut, starts with Windows, and launches right away.
-- Uninstall anytime from **Settings → Apps → Amora** (you choose whether to keep your data).
+<details>
+<summary>Bahasa Indonesia</summary>
 
-The installer is not code-signed yet, so Windows SmartScreen may warn you.
-Click **More info → Run anyway**. Each release lists the SHA-256 of `AmoraSetup.exe`
-so you can verify the file.
+### Perbaikan penting
+- **Rapikan tabel tidak lagi berulang tanpa henti.** Di 0.2.0, menyalin tabel Markdown membuat Amora menulis ulang clipboard terus-menerus (sekitar 7× per detik) sampai kamu menyalin hal lain. Sekarang tabel hanya dirapikan sekali.
+- **Data lebih aman.** Setelan, to-do, jadwal, dan Shelf disimpan dengan cara yang aman: file lama tetap utuh bila Amora mati di tengah penyimpanan. File yang rusak disisihkan sebagai `.rusak`, tidak langsung diganti nilai bawaan. File yang diedit di Notepad (ber-BOM) kini tetap terbaca.
+- **Log crash.** Bila Amora berhenti mendadak, penyebabnya tercatat di `%LOCALAPPDATA%\Amora\log.txt` (hanya disimpan di komputermu, tidak dikirim ke mana pun).
+- Ganti resolusi atau skala layar kini langsung dikenali oleh fitur "minggir untuk tab di belakang".
 
-Requires Windows 10 (1809+) or Windows 11, 64-bit.
+### Polesan
+- Notch tidak lagi terbuka saat kursor hanya lewat; kursor perlu diam sebentar (150 ms).
+- Lirik yang terlalu panjang di notch tertutup bergeser pelan sampai ujung, tidak lagi terpotong "…". Bergeser hanya sekali per baris, jadi tetap hemat CPU.
+- Thumbnail Shelf dimuat di latar belakang, jadi notch tidak tersendat saat membuka file besar atau file di jaringan.
+- Sudut atas notch kini melengkung ke dalam, menyatu dengan tepi atas layar.
 
-## Features
+**Pasang / perbarui:** unduh `AmoraSetup.exe` lalu jalankan. Setelan, tugas, dan jadwal tetap tersimpan. Tidak perlu hak admin.
 
-Hover the notch to open it; scroll or click the page names to switch pages.
+Installer belum ditandatangani, jadi Windows SmartScreen mungkin memberi peringatan: klik **More info → Run anyway**.
 
-| Page | What it does |
-|---|---|
-| **Music** | Any player (Spotify, YouTube in the browser, …): cover art, play/pause/skip, seek. |
-| | **Smart lyrics** from [LRCLIB](https://lrclib.net), synced line by line. YouTube-style titles (`Artist - Song (Official Video)`, VEVO / "- Topic" channels) are cleaned up so lyrics are found even for music videos. Re-search, per-song timing offset, click a line to jump. |
-| | Sleep timer (15/30/60 min): fades the volume out, pauses, restores the volume. |
-| **Focus** | Pomodoro timer; the countdown stays visible in the closed notch. |
-| **Water** | Log what you drink, hourly chart, reminders during your active hours. |
-| **To-do** | Type straight into the notch; end with `@14:30` for a reminder. |
-| **Schedule** | Weekly classes: `Mon 08:00-09:40 Databases @R301` (English or Indonesian day names). Countdown before class, reminder 10 minutes ahead. |
-| **Shelf** | Drop files on the notch, drag them out into a chat or folder (copied, never moved). New screenshots land here automatically. |
-| **Clipboard** | Last 5 copied texts, in memory only. Off by default; skips password managers. |
-| **Settings** | Every option, applied instantly. |
-
-**Tidy tables for Google Docs / Word.** Copy a table from Claude, ChatGPT or Gemini — by
-selecting it or with a "copy table" button — and just press Ctrl+V in Google Docs or Word:
-Amora has already swapped it for a clean table with borders, a bold header row and column
-widths that fit the content, in your document's own font. The plain text on
-the clipboard is left untouched, so pasting into a text editor or a chat still gives the same
-text. Spreadsheet tables (Excel, Google Sheets) and copies that include text outside the
-table are left as they are.
-
-In the closed notch:
-
-- **OSD** for volume and screen brightness.
-- **Notifications** for Caps Lock, keyboard language, charger / low battery, Wi-Fi / internet, audio output (e.g. headphones).
-- **Privacy dots**: orange while an app uses the microphone, green for the camera.
-- **Mascot**: when the PC has been idle, the clock steps aside and a pair of eyes appears; they doze off and say hi when you're back.
-- **Minimal mode**: the closed notch becomes a thin line for laptops with a thick top bezel.
-- **Gets out of the way**: when a tab or window sits behind the notch and your cursor heads there, the notch moves aside. Push the cursor against the very top edge to open the notch.
-
-Right-click the notch or the tray icon for the menu.
-
-## Privacy
-
-No accounts, no analytics. Tasks, schedule, water log, shelf, settings and a local crash
-log (`log.txt`, never sent anywhere) stay in `%LOCALAPPDATA%\Amora`. The only network traffic is to LRCLIB when lyrics are turned on
-(off by default): song title, artist and duration. The keyboard hook only reacts to
-Caps Lock and the language-switch keys; nothing you type is recorded.
-
-## Building
-
-Needs Rust (MSVC toolchain) and Visual Studio Build Tools with the Windows SDK.
-
-```
-cargo run --release
-```
-
-Build the installer (`dist\AmoraSetup.exe` plus its SHA-256):
-
-```
-powershell -ExecutionPolicy Bypass -File tools\build-installer.ps1
-```
-
-`cargo test` runs the unit tests (title cleaning, LRC parsing, schedule and reminder parsing, …).
-Developer flags are listed in [README.id.md](README.id.md#menjalankan-dari-kode).
-
-## Inspiration
-
-Inspired by [Nusa](https://rama2555.github.io/nusa/) for Windows and the macOS notch apps
-such as [boring.notch](https://github.com/TheBoredTeam/boring.notch). Amora is an
-independent implementation; no code was copied from those projects.
-
-## License
-
-[MIT](LICENSE)
+</details>
