@@ -41,6 +41,20 @@ pub fn master_volume() -> Option<f32> {
     unsafe { default_volume()?.GetMasterVolumeLevelScalar().ok() }
 }
 
+pub fn master_state() -> Result<(f32, bool)> {
+    let ep = default_volume().ok_or_else(windows::core::Error::from_win32)?;
+    unsafe { Ok((ep.GetMasterVolumeLevelScalar()?, ep.GetMute()?.as_bool())) }
+}
+
+pub fn change_master(level: Option<f32>, mute: Option<bool>) -> Result<()> {
+    let ep = default_volume().ok_or_else(windows::core::Error::from_win32)?;
+    unsafe {
+        if let Some(v) = level { ep.SetMasterVolumeLevelScalar(v.clamp(0.0, 1.0), std::ptr::null())?; }
+        if let Some(m) = mute { ep.SetMute(m, std::ptr::null())?; }
+    }
+    Ok(())
+}
+
 pub fn set_master_volume(v: f32) {
     if let Some(ep) = default_volume() {
         unsafe {

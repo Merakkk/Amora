@@ -3,6 +3,7 @@
 
 pub mod clipboard;
 pub mod clock;
+pub mod controls;
 pub mod media;
 pub mod osd;
 pub mod pomodoro;
@@ -28,6 +29,7 @@ pub enum Poll {
 }
 
 pub enum Event {
+    MonitorChanged(crate::monitors::Monitor),
     MediaChanged,
     LyricsChanged,
     Volume { level: u32, muted: bool },
@@ -40,6 +42,15 @@ pub enum Event {
 }
 
 pub trait Module {
+    /// Refresh visible data before measuring the page, never during drawing.
+    fn prepare(&mut self) {}
+    /// Optional captured pointer interaction. Returning true consumes the click.
+    fn pointer_down(&mut self, _r: Rect, _x: f32, _y: f32) -> bool { false }
+    fn pointer_move(&mut self, _x: f32, _y: f32) {}
+    fn pointer_up(&mut self) {}
+    fn cancel_pointer(&mut self) { self.pointer_up(); }
+    /// Return true when wheel was consumed by local content instead of tab navigation.
+    fn wheel(&mut self, _x: f32, _y: f32, _delta: i16) -> bool { false }
     /// Nama halaman di notch yang terbuka. `None` = bukan halaman (mis. jam).
     fn tab(&self) -> Option<&'static str> {
         None
