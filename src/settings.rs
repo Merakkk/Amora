@@ -12,6 +12,8 @@ pub type SharedSettings = Rc<RefCell<Settings>>;
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Settings {
+    /// Identitas perangkat monitor pilihan; None mengikuti monitor utama.
+    pub monitor: Option<String>,
     /// Lirik dinyalakan pengguna. Mati secara default karena mengirim judul lagu ke LRCLIB.
     pub lyrics: bool,
     /// Notch minggir saat ada jendela di posisinya dan kursor mengarah ke jendela itu.
@@ -33,6 +35,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            monitor: None,
             lyrics: false,
             auto_hide: true,
             mascot: true,
@@ -81,6 +84,10 @@ impl Default for WaterCfg {
 }
 
 pub fn data_dir() -> Option<PathBuf> {
+    // Preview instances keep all settings/data beside the test executable.
+    if std::env::var_os("AMORA_DEV").is_some() {
+        if let Some(path) = std::env::var_os("AMORA_DATA_DIR") { return Some(PathBuf::from(path)); }
+    }
     Some(PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Amora"))
 }
 
@@ -121,5 +128,25 @@ impl Settings {
 
     pub fn save(&self) {
         save_json("settings.json", self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn old_settings_keep_values_and_default_to_primary_monitor() {
+        let settings: Settings = serde_json::from_str(r#"{"mascot":false,"pomodoro":{"focus_min":45}}"#).unwrap();
+        assert!(settings.monitor.is_none());
+        assert!(!settings.mascot);
+        assert_eq!(settings.pomodoro.focus_min, 45);
+        assert_eq!(settings.pomodoro.short_break_min, 5);
+    }
+    #[test]
+    fn selected_monitor_survives_serialization() {
+        let mut settings = Settings::default();
+        settings.monitor = Some(r"\\?\DISPLAY#ABC#123#{id}".into());
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(settings.monitor, restored.monitor);
     }
 }

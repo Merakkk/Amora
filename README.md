@@ -39,6 +39,7 @@ Hover the notch to open it; scroll or click the page names to switch pages.
 | **Schedule** | Weekly classes: `Mon 08:00-09:40 Databases @R301` (English or Indonesian day names). Countdown before class, reminder 10 minutes ahead. |
 | **Shelf** | Drop files on the notch, drag them out into a chat or folder (copied, never moved). New screenshots land here automatically. |
 | **Clipboard** | Last 5 copied texts, in memory only. Off by default; skips password managers. |
+| **Controls** | Master volume/mute, brightness of the notch's monitor, and per-application volume/mute on the default audio output. Scroll inside the application list to browse it. |
 | **Settings** | Every option, applied instantly. |
 
 **Tidy tables for Google Docs / Word.** Copy a table from Claude, ChatGPT or Gemini — by
@@ -59,6 +60,13 @@ In the closed notch:
 - **Gets out of the way**: when a tab or window sits behind the notch and your cursor heads there, the notch moves aside. Push the cursor against the very top edge to open the notch.
 
 Right-click the notch or the tray icon for the menu.
+
+Drag the small handle at the top of the expanded notch to another monitor; release to
+snap it to the top centre. Escape cancels the drag. The selected monitor is remembered;
+disconnecting it temporarily falls back to the primary display. Use **Kembalikan ke monitor utama**
+in the tray menu to reset the preference. Display brightness requires WMI or DDC/CI hardware
+support; unsupported controls are disabled. Audio sessions from the same executable are grouped;
+**Campuran** indicates differing session volumes or mute states. Audio levels remain managed by Windows.
 
 ## Privacy
 

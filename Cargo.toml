@@ -1,6 +1,6 @@
 [package]
 name = "amora"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Notch hidup di tepi atas layar Windows"
 build = "build.rs"
@@ -24,6 +24,7 @@ windows = { version = "0.58", features = [
     "Media_Control",
     "Storage_Streams",
     "Win32_Devices_FunctionDiscovery",
+    "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Graphics_Direct2D",
@@ -51,6 +52,9 @@ windows = { version = "0.58", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Time",
+    "Win32_System_Wmi",
+    "Win32_System_Variant",
+    "Win32_System_Rpc",
     "Win32_UI_Accessibility",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",

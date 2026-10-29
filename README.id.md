@@ -27,13 +27,34 @@ cargo run --release
 
 Klik kanan notch atau klik ikon Amora di tray untuk menu: **Mulai bersama Windows**, **Maskot Amora**, **Notch minimal**, **Riwayat clipboard**, **Tentang Amora**, **Keluar**.
 
+## Monitor dan Kontrol
+
+Buka notch, lalu seret pegangan kecil di bagian tengah atas ke monitor tujuan.
+Saat dilepas, notch menempel di tengah atas monitor itu dan mengingat pilihan setelah restart.
+Escape membatalkan seret. Jika monitor dilepas, notch memakai monitor utama sementara;
+saat disambungkan lagi, notch kembali ke monitor pilihan. Menu tray **Kembalikan ke monitor utama** menghapus pilihan tersebut.
+
+Halaman **Kontrol** menyediakan slider volume utama, mute, kecerahan monitor tempat notch
+berada, dan mixer aplikasi untuk speaker/headphone default Windows. Klik atau seret slider.
+Gulir di daftar aplikasi untuk melihat baris lainnya; gulir di luar daftar tetap mengganti halaman.
+Sesi dari executable yang sama digabung; **Campuran** berarti volume atau mute sesi-sesinya berbeda.
+Slider menyamakan volumenya, tombol mute menyamakan status bisunya. Aplikasi tanpa sesi audio tidak muncul.
+
+Kecerahan memakai WMI untuk panel bawaan dan DDC/CI untuk monitor eksternal yang mendukungnya.
+Jika kontrol tidak tersedia atau target tidak dapat dipastikan, slider dinonaktifkan.
+Volume dan kecerahan mengikuti Windows/perangkat, tidak dipaksakan ulang dari setelan Amora.
+
 Untuk pengembangan:
 
 - `AmoraSetup.exe /S` memasang tanpa pertanyaan; `amora --uninstall --quiet [--wipe]` menghapus tanpa pertanyaan.
 - `AMORA_DEV=1` menjalankan instance uji di samping Amora yang sedang jalan.
+- `amora --preview-controls` membuka halaman Kontrol untuk uji visual, selalu terbuka, dengan data terpisah di `amora-preview-data` di samping executable. Volume/kecerahan tetap mengontrol perangkat nyata.
+- `amora --probe-controls` membaca monitor, dukungan kecerahan, volume utama, dan sesi audio tanpa mengubah nilainya atau setelan.
+- `AMORA_DEV=1` bersama `AMORA_DATA_DIR=<folder>` mengisolasi data instance uji.
 - `AMORA_DEV_X=<piksel>` menggeser instance uji (bawaan: ke kanan), berguna di layar sempit.
 - `AMORA_DEMO_LYRIC="<baris>"` memutar lagu palsu dengan baris lirik itu, untuk menguji tampilan lirik tanpa musik.
 - `cargo run --example volume_ping` menggeser volume 1% lalu mengembalikannya, untuk menguji OSD.
+- `cargo run --release --example audio_session` membuat sesi audio hening selama 120 detik untuk menguji mixer; salin executable dengan nama berbeda untuk mensimulasikan beberapa aplikasi.
 - `AMORA_MASCOT=mata|tidur|halo` memaksa keadaan maskot.
 - `AMORA_FORCE_OPEN=1` membuat notch selalu terbuka; `AMORA_PAGE=Fokus` memilih halamannya.
 - `cargo run -- --probe-lyrics "<judul>" "<artis>" <durasi-detik>` menguji pencarian lirik.
@@ -47,6 +68,7 @@ Untuk pengembangan:
 ## Struktur
 
 - `src/main.rs` — jendela, hover, animasi, pemilihan modul
+- `src/monitors.rs`, `src/brightness.rs`, `src/mixer.rs` — identitas monitor, worker kecerahan, dan sesi audio output default
 - `src/gfx.rs` — gambar (Direct2D ke jendela layered; area transparan tembus klik)
 - `src/media.rs` — membaca musik dari Windows (SMTC) di thread terpisah
 - `src/lyrics/` — pencarian lirik LRCLIB (`matcher.rs`: pembersih judul + parser LRC)
@@ -102,6 +124,7 @@ Semua bisa diubah di halaman **Setelan** pada notch. Tersimpan di `%LOCALAPPDATA
 - `screenshot_to_shelf`: screenshot baru masuk Shelf (default `true`)
 - `mascot`, `minimal`: juga bisa diubah lewat menu tray
 - `auto_hide`: notch minggir saat kursor mengarah ke jendela di belakangnya (default `true`)
+- `monitor`: identitas monitor pilihan, atau `null` untuk monitor utama
 - `pomodoro`: `focus_min`, `short_break_min`, `long_break_min`, `rounds`
 - `water`: `goal_ml`, `sip_ml`, `remind`, `interval_min`, `start_hour`, `end_hour`
 

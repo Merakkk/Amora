@@ -1,6 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod anim;
+mod brightness;
+mod mixer;
+mod monitors;
 mod autostart;
 mod crashlog;
 mod gfx;
@@ -92,8 +95,18 @@ const TIMER_HOVER: usize = 9;
 const HOVER_DELAY_MS: u32 = 150;
 /// Jari-jari "telinga" cekung yang menyambungkan notch ke tepi atas layar.
 const EAR_R: f32 = 8.0;
+const GRIP_H: f32 = 12.0;
+
+struct NotchDrag {
+    origin: POINT,
+    anchor: POINT,
+}
 
 struct App {
+    monitor: Option<monitors::Monitor>,
+    notch_drag: Option<NotchDrag>,
+    pointer_page: Option<usize>,
+    suppress_up: bool,
     hwnd: HWND,
     g: Gfx,
     origin: POINT,
@@ -167,7 +180,7 @@ impl App {
     }
 
     fn is_open(&self) -> bool {
-        self.hover || self.alert || self.editing || self.drop_hover || force_open()
+        self.notch_drag.is_some() || self.pointer_page.is_some() || self.hover || self.alert || self.editing || self.drop_hover || force_open()
     }
 
     /// Info kecil dari modul lain untuk notch tertutup.
@@ -266,7 +279,10 @@ impl App {
         let (w, h) = self.modules[self.page].expanded_size();
         // Cukup lebar supaya semua nama halaman muat.
         let tabs_w = self.tabs().len() as f32 * TAB_W + 24.0;
-        (w.max(MIN_OPEN_W).max(tabs_w), h + TAB_H)
+        let max_w = self.monitor.as_ref().map_or(CANVAS_W - 16.0, |m| (m.rect.right - m.rect.left) as f32 / self.g.scale - 16.0);
+        let max_h = self.monitor.as_ref().map_or(CANVAS_H - 4.0, |m| (m.rect.bottom - m.rect.top) as f32 / self.g.scale - 8.0);
+        (w.max(MIN_OPEN_W).max(tabs_w).min(max_w).min(CANVAS_W - 16.0),
+            (h + TAB_H + GRIP_H).min(max_h).min(CANVAS_H - 4.0))
     }
 
     fn retarget(&mut self) {
@@ -304,6 +320,11 @@ impl App {
     }
 
     fn poll(&mut self) {
+        // Do not replace the page underneath a captured slider or monitor drag.
+        if self.pointer_page.is_some() || self.notch_drag.is_some() {
+            unsafe { SetTimer(self.hwnd, TIMER_POLL, 200, None); }
+            return;
+        }
         let mut changed = false;
         for i in 0..self.modules.len() {
             match self.modules[i].poll() {
@@ -324,17 +345,16 @@ impl App {
         }
     }
 
-    /// Letakkan kanvas di tengah atas monitor utama, sesuai DPI-nya.
+    /// Resolve the saved device identity again on every display topology change.
     fn place(&mut self) {
-        unsafe {
-            let scale = GetDpiForWindow(self.hwnd) as f32 / 96.0;
-            let mon = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
-            let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-            let _ = GetMonitorInfoW(mon, &mut mi);
+        let list = monitors::all();
+        let wanted = self.settings.borrow().monitor.clone();
+        let Some(monitor) = monitors::choose(&list, wanted.as_deref()).cloned() else { return };
+        {
+            let scale = monitor.scale;
             let pw = (CANVAS_W * scale).round() as i32;
             let ph = (CANVAS_H * scale).round() as i32;
-            let m = mi.rcMonitor;
-            self.origin = POINT { x: m.left + (m.right - m.left - pw) / 2, y: m.top };
+            self.origin = monitors::top_center(monitor.rect, pw);
             if dev_instance() {
                 // `AMORA_DEV_X=<piksel>` menggeser instance uji ke tempat lain (layar sempit).
                 let dx = std::env::var("AMORA_DEV_X").ok().and_then(|v| v.parse().ok());
@@ -344,6 +364,44 @@ impl App {
                 let _ = self.g.resize(pw, ph, scale);
             }
         }
+        self.monitor = Some(monitor.clone());
+        for module in &mut self.modules { module.on_event(&Event::MonitorChanged(monitor.clone())); }
+    }
+
+    fn grip(&self) -> Rect {
+        let island = self.island();
+        Rect::new(island.x + island.w / 2.0 - 28.0, 0.0, 56.0, GRIP_H)
+    }
+
+    fn finish_notch_drag(&mut self, commit: bool) {
+        let Some(drag) = self.notch_drag.take() else { return };
+        self.suppress_up = !commit;
+        if commit {
+            let mut pt = POINT::default();
+            unsafe { let _ = GetCursorPos(&mut pt); }
+            if let Some(monitor) = monitors::at_point(&monitors::all(), pt) {
+                let mut settings = self.settings.borrow_mut();
+                settings.monitor = Some(monitor.id.clone());
+                settings.save();
+            }
+            self.place();
+        } else { self.origin = drag.origin; }
+        self.set_editing(false);
+        unsafe { let _ = ReleaseCapture(); }
+        self.sync_hover_after_capture();
+        self.recheck_covered();
+        self.retarget();
+        self.render();
+    }
+
+    fn sync_hover_after_capture(&mut self) {
+        let mut pt = POINT::default();
+        unsafe { let _ = GetCursorPos(&mut pt); }
+        self.hover_pending = false;
+        self.hover = self.island().contains((pt.x - self.origin.x) as f32 / self.g.scale,
+            (pt.y - self.origin.y) as f32 / self.g.scale);
+        // WM_MOUSELEAVE may already have fired (and been ignored) during capture.
+        if self.hover { self.track_leave(); }
     }
 
     fn island(&self) -> Rect {
@@ -353,10 +411,18 @@ impl App {
 
     fn content(&self) -> Rect {
         let i = self.island();
-        Rect::new(i.x, i.y, i.w, (i.h - TAB_H).max(0.0))
+        Rect::new(i.x, i.y + GRIP_H, i.w, (i.h - TAB_H - GRIP_H).max(0.0))
     }
 
     fn render(&mut self) {
+        if self.is_open() {
+            let old_size = self.modules[self.page].expanded_size();
+            self.modules[self.page].prepare();
+            if old_size != self.modules[self.page].expanded_size()
+                && self.pointer_page.is_none() && self.notch_drag.is_none() {
+                self.retarget();
+            }
+        }
         if self.g.begin().is_err() {
             return;
         }
@@ -406,6 +472,8 @@ impl App {
             let content = self.content();
             self.modules[self.page].draw_expanded(&mut self.g, content);
             self.draw_tabs(Rect::new(island.x, content.y + content.h, island.w, TAB_H));
+            let grip = self.grip();
+            self.g.fill_rrect(Rect::new(grip.x + 12.0, 4.0, grip.w - 24.0, 3.0), 1.5, DIM);
         }
         self.g.alpha = 1.0;
         self.g.pop_clip();
@@ -432,7 +500,7 @@ impl App {
 
     fn draw_tabs(&mut self, r: Rect) {
         let tabs = self.tabs();
-        let w = TAB_W;
+        let w = TAB_W.min((r.w - 12.0) / tabs.len().max(1) as f32);
         let x0 = r.x + (r.w - w * tabs.len() as f32) / 2.0;
         for (k, &i) in tabs.iter().enumerate() {
             let tr = Rect::new(x0 + k as f32 * w, r.y, w, r.h - 6.0);
@@ -605,6 +673,42 @@ impl App {
 
     fn handle(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         match msg {
+            WM_MOUSEMOVE if self.notch_drag.is_some() => {
+                let mut pt = POINT::default();
+                unsafe { let _ = GetCursorPos(&mut pt); }
+                let drag = self.notch_drag.as_ref().unwrap();
+                self.origin = POINT { x: drag.origin.x + pt.x - drag.anchor.x, y: drag.origin.y + pt.y - drag.anchor.y };
+                self.render();
+            }
+            WM_MOUSEMOVE if self.pointer_page.is_some() => {
+                let x = (lp.0 & 0xffff) as i16 as f32 / self.g.scale;
+                let y = ((lp.0 >> 16) & 0xffff) as i16 as f32 / self.g.scale;
+                self.modules[self.pointer_page.unwrap()].pointer_move(x, y);
+                self.render();
+            }
+            WM_LBUTTONUP if self.notch_drag.is_some() => self.finish_notch_drag(true),
+            WM_LBUTTONUP if self.pointer_page.is_some() => {
+                if let Some(i) = self.pointer_page.take() { self.modules[i].pointer_up(); }
+                self.set_editing(false);
+                unsafe { let _ = ReleaseCapture(); }
+                self.sync_hover_after_capture();
+                self.retarget();
+                self.render();
+            }
+            WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize && self.notch_drag.is_some() => self.finish_notch_drag(false),
+            WM_CAPTURECHANGED | WM_CANCELMODE => {
+                self.finish_notch_drag(false);
+                if let Some(i) = self.pointer_page.take() {
+                    self.modules[i].cancel_pointer();
+                    self.suppress_up = true;
+                    self.set_editing(false);
+                    if msg == WM_CANCELMODE { unsafe { let _ = ReleaseCapture(); } }
+                    self.hover = false;
+                    self.retarget();
+                    self.render();
+                }
+                self.press = None;
+            }
             // Ada tab di belakang notch dan kursor datang dari bawah: minggir, jangan dibuka.
             // Untuk membuka notch, tempelkan kursor ke tepi paling atas layar.
             WM_MOUSEMOVE if !self.hover && self.auto_hide && self.covered && !self.is_open() && self.cursor_wants_behind() => {
@@ -640,11 +744,31 @@ impl App {
                 }
             }
             WM_LBUTTONDOWN => {
+                self.suppress_up = false;
                 let s = self.g.scale;
                 let x = (lp.0 & 0xffff) as i16 as f32 / s;
                 let y = ((lp.0 >> 16) & 0xffff) as i16 as f32 / s;
-                self.press = Some((x, y));
+                if self.is_open() && self.grip().contains(x, y) {
+                    self.press = None;
+                    self.modules[self.page].stop_editing();
+                    let mut pt = POINT::default();
+                    unsafe { let _ = GetCursorPos(&mut pt); }
+                    self.notch_drag = Some(NotchDrag { origin: self.origin, anchor: pt });
+                    self.set_editing(true);
+                    unsafe { SetCapture(self.hwnd); }
+                    self.retarget();
+                } else if self.is_open() && {
+                    let content = self.content();
+                    self.modules[self.page].pointer_down(content, x, y)
+                } {
+                    self.press = None;
+                    self.pointer_page = Some(self.page);
+                    self.set_editing(true);
+                    unsafe { SetCapture(self.hwnd); }
+                    self.render();
+                } else { self.press = Some((x, y)); }
             }
+            WM_MOUSELEAVE if self.notch_drag.is_some() || self.pointer_page.is_some() => {}
             WM_MOUSELEAVE => {
                 if std::mem::take(&mut self.hover_pending) {
                     unsafe {
@@ -655,6 +779,7 @@ impl App {
                 self.alert = false;
                 self.retarget();
             }
+            WM_LBUTTONUP if self.suppress_up => { self.suppress_up = false; }
             WM_LBUTTONUP => {
                 self.press = None;
                 let s = self.g.scale;
@@ -685,6 +810,13 @@ impl App {
                 self.render();
             }
             WM_MOUSEWHEEL if self.is_open() && !self.editing => {
+                if self.pointer_page.is_some() || self.notch_drag.is_some() { return Some(LRESULT(0)); }
+                let mut pt = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
+                unsafe { let _ = ScreenToClient(self.hwnd, &mut pt); }
+                if self.modules[self.page].wheel(pt.x as f32 / self.g.scale, pt.y as f32 / self.g.scale, (wp.0 >> 16) as i16) {
+                    self.render();
+                    return Some(LRESULT(0));
+                }
                 let tabs = self.tabs();
                 let k = tabs.iter().position(|&i| i == self.page).unwrap_or(0);
                 let up = (wp.0 >> 16) as i16 > 0;
@@ -701,6 +833,17 @@ impl App {
                 self.schedule_poll();
                 self.retarget();
                 self.render();
+            }
+            WM_ACTIVATE if self.notch_drag.is_some() && (wp.0 & 0xffff) as u32 == WA_INACTIVE => {
+                self.finish_notch_drag(false);
+            }
+            WM_ACTIVATE if self.pointer_page.is_some() && (wp.0 & 0xffff) as u32 == WA_INACTIVE => {
+                if let Some(i) = self.pointer_page.take() { self.modules[i].cancel_pointer(); }
+                self.suppress_up = true;
+                self.set_editing(false);
+                unsafe { let _ = ReleaseCapture(); }
+                self.hover = false;
+                self.retarget();
             }
             WM_ACTIVATE if self.editing && (wp.0 & 0xffff) as u32 == WA_INACTIVE => {
                 // Klik di luar notch: simpan ketikan.
@@ -826,6 +969,14 @@ impl App {
                 self.on_network();
             }
             WM_DPICHANGED | WM_DISPLAYCHANGE => {
+                if msg == WM_DPICHANGED && self.notch_drag.is_some() { return Some(LRESULT(0)); }
+                self.finish_notch_drag(false);
+                if let Some(i) = self.pointer_page.take() {
+                    self.modules[i].cancel_pointer();
+                    self.suppress_up = true;
+                    self.set_editing(false);
+                    unsafe { let _ = ReleaseCapture(); }
+                }
                 self.place();
                 // Posisi notch di layar berubah: cek ulang jendela di belakangnya.
                 self.recheck_covered();
@@ -857,6 +1008,7 @@ const CMD_ABOUT: usize = 3;
 const CMD_MASCOT: usize = 4;
 const CMD_MINIMAL: usize = 5;
 const CMD_CLIPBOARD: usize = 6;
+const CMD_PRIMARY: usize = 7;
 
 /// Menu yang sama untuk klik kanan notch dan klik ikon tray.
 fn show_menu(hwnd: HWND) {
@@ -873,6 +1025,7 @@ fn show_menu(hwnd: HWND) {
         let _ = AppendMenuW(menu, MF_STRING | check(mascot), CMD_MASCOT, w!("Maskot Amora"));
         let _ = AppendMenuW(menu, MF_STRING | check(minimal), CMD_MINIMAL, w!("Notch minimal"));
         let _ = AppendMenuW(menu, MF_STRING | check(clip), CMD_CLIPBOARD, w!("Riwayat clipboard"));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_PRIMARY, w!("Kembalikan ke monitor utama"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, CMD_ABOUT, w!("Tentang Amora"));
         let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT, w!("Keluar"));
@@ -888,6 +1041,18 @@ fn show_menu(hwnd: HWND) {
                 let _ = DestroyWindow(hwnd);
             }
             CMD_AUTOSTART => autostart::set(!auto),
+            CMD_PRIMARY => with_app(|a| {
+                a.finish_notch_drag(false);
+                {
+                    let mut settings = a.settings.borrow_mut();
+                    settings.monitor = None;
+                    settings.save();
+                }
+                a.place();
+                a.recheck_covered();
+                a.retarget();
+                a.render();
+            }),
             CMD_MASCOT | CMD_MINIMAL | CMD_CLIPBOARD => with_app(|a| {
                 {
                     let mut s = a.settings.borrow_mut();
@@ -1023,8 +1188,34 @@ impl IDropTarget_Impl for DropTarget_Impl {
 
 fn main() -> Result<()> {
     crashlog::install();
+    // Diagnostics must use the same physical coordinates/DPI as the real window.
+    unsafe { let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
     // Untuk pengembangan: `cargo run -- --probe-lyrics "<judul>" "<artis>" <durasi>`
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("--preview-controls") {
+        std::env::set_var("AMORA_DEV", "1");
+        std::env::set_var("AMORA_FORCE_OPEN", "1");
+        std::env::set_var("AMORA_PAGE", "Kontrol");
+        std::env::set_var("AMORA_DEV_X", "0");
+        if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.join("amora-preview-data"))) {
+            std::env::set_var("AMORA_DATA_DIR", dir);
+        }
+    }
+    // Read-only hardware diagnostics; never changes brightness, volume or settings.
+    if args.get(1).map(String::as_str) == Some("--probe-controls") {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok()?; }
+        for monitor in monitors::all() {
+            println!("monitor: {} | {} | primary={} | scale={} | rect={:?} | pnp={:?}", monitor.device, monitor.name, monitor.primary, monitor.scale, monitor.rect, monitor.pnp);
+            println!("brightness: {:?}", brightness::probe(&monitor));
+        }
+        println!("master: {:?}", system::master_state());
+        match mixer::read() {
+            Ok(snapshot) => for app in snapshot.apps { println!("audio: {} | {}% | mute={} | mixed={}", app.name, (app.level * 100.0).round(), app.muted, app.mixed); },
+            Err(error) => println!("audio: {error}"),
+        }
+        unsafe { CoUninitialize(); }
+        return Ok(());
+    }
     if args.get(1).map(String::as_str) == Some("--probe-lyrics") {
         return lyrics::probe(&args[2], &args[3], args[4].parse().unwrap_or(0.0));
     }
@@ -1082,7 +1273,6 @@ fn main() -> Result<()> {
         if GetLastError() == ERROR_ALREADY_EXISTS && !dev_instance() {
             return Ok(());
         }
-        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         // OLE (bukan COM biasa) supaya drag & drop file bisa dipakai.
         OleInitialize(None)?;
 
@@ -1096,8 +1286,12 @@ fn main() -> Result<()> {
             ..Default::default()
         };
         RegisterClassW(&wc);
+        // Expose the dedicated preview as a normal app window so UI test tools
+        // can discover it; production remains a non-activating tray/tool window.
+        let preview = args.get(1).map(String::as_str) == Some("--preview-controls");
+        let flags = WS_EX_LAYERED | WS_EX_TOPMOST | if preview { WS_EX_APPWINDOW } else { WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE };
         let hwnd = CreateWindowExW(
-            WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            flags,
             class,
             w!("Amora"),
             WS_POPUP,
@@ -1126,11 +1320,16 @@ fn main() -> Result<()> {
             Box::new(Schedule::new()),
             Box::new(Shelf::new(g.wic.clone(), hwnd)),
             Box::new(Clipboard::new(hwnd, settings.clone())),
+            Box::new(modules::controls::Controls::new()),
             Box::new(SettingsPage::new(settings.clone())),
             Box::new(ClockModule::new(settings.clone())),
         ];
 
         let mut app = App {
+            monitor: None,
+            notch_drag: None,
+            pointer_page: None,
+            suppress_up: false,
             hwnd,
             g,
             origin: POINT::default(),
@@ -1173,9 +1372,15 @@ fn main() -> Result<()> {
         app.h = Spring::new(h);
         app.schedule_poll();
         app.place();
+        app.retarget();
         app.render();
         APP.with(|a| *a.borrow_mut() = Some(app));
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        // A hidden launcher STARTUPINFO overrides the first ShowWindow call.
+        // Explicit preview mode must still expose its test window.
+        if args.get(1).map(String::as_str) == Some("--preview-controls") {
+            let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        }
         tray::add(hwnd);
         system::watch_power(hwnd);
         keyboard::spawn(hwnd);
