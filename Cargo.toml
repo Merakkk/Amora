@@ -1,6 +1,6 @@
 [package]
 name = "amora"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "Notch hidup di tepi atas layar Windows"
 build = "build.rs"
