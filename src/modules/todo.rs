@@ -9,7 +9,7 @@ use crate::settings::{load_json, save_json};
 use crate::time::{day, hhmm, now_ms, DAY, MIN};
 
 const FILE: &str = "todo.json";
-const ACCENT: Color = Color(0.35, 0.85, 0.55, 1.0);
+const ACCENT: Color = crate::theme::ACCENT;
 const LATE: Color = Color(1.0, 0.45, 0.4, 1.0);
 const MAX_ROWS: usize = 5;
 const ROW: f32 = 26.0;

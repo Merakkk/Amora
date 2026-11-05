@@ -7,8 +7,8 @@ use crate::gfx::{Align, Color, Gfx, Rect, DIM, FAINT, WHITE};
 use crate::settings::SharedSettings;
 use crate::time::mmss;
 
-const FOCUS: Color = Color(1.0, 0.42, 0.36, 1.0);
-const REST: Color = Color(0.35, 0.78, 1.0, 1.0);
+const FOCUS: Color = crate::theme::ACCENT;
+const REST: Color = Color(0.66, 0.77, 1.0, 1.0);
 
 #[derive(Clone, Copy, PartialEq)]
 enum Phase {

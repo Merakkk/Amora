@@ -12,6 +12,7 @@ pub type SharedSettings = Rc<RefCell<Settings>>;
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(default)]
 pub struct Settings {
+    pub appearance: Appearance,
     /// Identitas perangkat monitor pilihan; None mengikuti monitor utama.
     pub monitor: Option<String>,
     /// Lirik dinyalakan pengguna. Mati secara default karena mengirim judul lagu ke LRCLIB.
@@ -35,6 +36,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            appearance: Appearance::default(),
             monitor: None,
             lyrics: false,
             auto_hide: true,
@@ -47,6 +49,25 @@ impl Default for Settings {
             water: Default::default(),
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct Appearance {
+    pub transparency: u32,
+    pub blur: u32,
+}
+
+impl Default for Appearance {
+    fn default() -> Self { Self { transparency: 80, blur: 24 } }
+}
+
+impl Appearance {
+    pub fn normalize(&mut self) {
+        self.transparency = self.transparency.min(100);
+        self.blur = self.blur.min(48);
+    }
+    pub fn tint_alpha(&self) -> f32 { 1.0 - self.transparency.min(100) as f32 / 100.0 }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -121,7 +142,8 @@ impl Settings {
     /// Muat lalu tulis ulang, supaya kolom baru (dengan nilai bawaan) muncul di file
     /// dan bisa diubah pengguna.
     pub fn load_shared() -> SharedSettings {
-        let s: Settings = load_json("settings.json").unwrap_or_default();
+        let mut s: Settings = load_json("settings.json").unwrap_or_default();
+        s.appearance.normalize();
         s.save();
         Rc::new(RefCell::new(s))
     }
@@ -148,5 +170,17 @@ mod tests {
         settings.monitor = Some(r"\\?\DISPLAY#ABC#123#{id}".into());
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(settings.monitor, restored.monitor);
+    }
+    #[test]
+    fn appearance_migrates_clamps_and_preserves_other_settings_on_reset() {
+        let mut s: Settings = serde_json::from_str(r#"{"mascot":false,"appearance":{"transparency":999,"blur":999}}"#).unwrap();
+        s.appearance.normalize();
+        assert_eq!(s.appearance.tint_alpha(), 0.0);
+        assert_eq!(s.appearance.blur, 48);
+        s.appearance = Appearance::default();
+        assert!(!s.mascot);
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.appearance, Appearance::default());
+        assert!((old.appearance.tint_alpha() - 0.2).abs() < 0.001);
     }
 }

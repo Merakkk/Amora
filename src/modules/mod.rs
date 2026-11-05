@@ -29,6 +29,8 @@ pub enum Poll {
 }
 
 pub enum Event {
+    /// None = native material available; Some = software fallback and reason.
+    Material(Option<String>),
     MonitorChanged(crate::monitors::Monitor),
     MediaChanged,
     LyricsChanged,

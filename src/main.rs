@@ -2,6 +2,8 @@
 
 mod anim;
 mod brightness;
+mod composition;
+mod theme;
 mod mixer;
 mod monitors;
 mod autostart;
@@ -14,6 +16,7 @@ mod modules;
 mod network;
 mod occlusion;
 mod privacy;
+mod power;
 mod screenshots;
 mod settings;
 mod system;
@@ -40,7 +43,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use anim::Spring;
-use gfx::{Align, Color, Gfx, Rect, BLACK, DIM, WHITE};
+use gfx::{Align, Color, Gfx, Rect, DIM};
 use modules::{
     clipboard, clipboard::Clipboard, clock::ClockModule, media::MediaModule, schedule::Schedule,
     settings_page::SettingsPage, Poll, osd::Osd, pomodoro::Pomodoro, shelf, shelf::Shelf, todo::Todo,
@@ -50,12 +53,10 @@ use settings::Settings;
 
 /// Ukuran kanvas jendela (DIP). Notch digambar di tengah atasnya; sisanya transparan.
 const CANVAS_W: f32 = 760.0;
-const CANVAS_H: f32 = 380.0;
-/// Tinggi baris nama halaman di bawah notch yang terbuka.
-const TAB_H: f32 = 30.0;
+const CANVAS_H: f32 = 800.0;
+/// Tinggi baris ikon halaman di bawah notch yang terbuka.
+const TAB_H: f32 = theme::NAV_ROW;
 const MIN_OPEN_W: f32 = 360.0;
-/// Lebar satu nama halaman di baris bawah notch yang terbuka.
-const TAB_W: f32 = 62.0;
 const BADGE_W: f32 = 64.0;
 /// Lebar per titik indikator mic/kamera di notch tertutup.
 const DOT_W: f32 = 12.0;
@@ -85,13 +86,12 @@ const DODGE_MS: u32 = 80;
 /// Area (DIP) di sekitar notch: kursor di sini berarti mengarah ke tab di belakang notch.
 const DODGE_MARGIN_X: f32 = EAR_R + 4.0;
 const DODGE_MARGIN_Y: f32 = 4.0;
-/// Kursor ditempel di tepi paling atas layar (piksel) = ingin membuka notch, bukan tab.
-const TOP_EDGE_PX: i32 = 1;
 /// Lama notch terbuka sendiri saat ada pengingat.
 const ALERT_MS: u32 = 7000;
 /// Kursor harus diam sebentar di atas notch sebelum ia terbuka, supaya tidak
 /// terbuka sendiri saat kursor hanya lewat.
 const TIMER_HOVER: usize = 9;
+const TIMER_NAV_HOVER: usize = 12;
 const HOVER_DELAY_MS: u32 = 150;
 /// Jari-jari "telinga" cekung yang menyambungkan notch ke tepi atas layar.
 const EAR_R: f32 = 8.0;
@@ -118,6 +118,8 @@ struct App {
     hover: bool,
     /// Kursor baru masuk; notch dibuka bila masih di sana setelah `HOVER_DELAY_MS`.
     hover_pending: bool,
+    /// Previous panel bounds keep a navigation click alive while the panel shrinks.
+    navigation_hover: Option<Rect>,
     /// Notch dibuka sendiri oleh pengingat.
     alert: bool,
     /// Keyboard sedang diarahkan ke halaman (mis. mengetik tugas).
@@ -180,7 +182,8 @@ impl App {
     }
 
     fn is_open(&self) -> bool {
-        self.notch_drag.is_some() || self.pointer_page.is_some() || self.hover || self.alert || self.editing || self.drop_hover || force_open()
+        self.notch_drag.is_some() || self.pointer_page.is_some() || self.navigation_hover.is_some()
+            || self.hover || self.alert || self.editing || self.drop_hover || force_open()
     }
 
     /// Info kecil dari modul lain untuk notch tertutup.
@@ -211,17 +214,20 @@ impl App {
 
     fn recheck_covered(&mut self) {
         let covered = self.auto_hide && occlusion::covered(self.hwnd, self.compact_screen_rect(0.0, 0.0));
-        if covered == self.covered {
-            return;
-        }
-        self.covered = covered;
+        // Minimal mode needs pointer polling even on an empty desktop: its
+        // transparent reveal band cannot receive WM_MOUSEMOVE itself.
         unsafe {
-            if covered {
+            if covered || self.settings.borrow().minimal {
                 SetTimer(self.hwnd, TIMER_DODGE, DODGE_MS, None);
             } else {
                 let _ = KillTimer(self.hwnd, TIMER_DODGE);
             }
         }
+        if covered == self.covered {
+            return;
+        }
+        self.covered = covered;
+        if self.hover { self.track_leave(); }
         self.dodge = false;
         self.check_dodge();
         self.retarget();
@@ -233,12 +239,68 @@ impl App {
         let p = occlusion::cursor();
         let z = self.compact_screen_rect(DODGE_MARGIN_X, DODGE_MARGIN_Y);
         let inside = p.x >= z.left && p.x < z.right && p.y >= z.top && p.y < z.bottom;
-        inside && p.y > z.top + TOP_EDGE_PX
+        inside && !self.cursor_over_notch()
+    }
+
+    fn cursor_over_notch(&self) -> bool {
+        let r = self.island();
+        let s = self.g.scale;
+        let visible = RECT { left: self.origin.x + (r.x * s).round() as i32,
+            top: self.origin.y + (r.y * s).round() as i32,
+            right: self.origin.x + ((r.x + r.w) * s).round() as i32,
+            bottom: self.origin.y + ((r.y + r.h) * s).round() as i32 };
+        let edge_only = self.as_line() || (self.covered && !self.is_open());
+        occlusion::opening_target(occlusion::cursor(), visible, self.compact_screen_rect(0.0, 0.0), edge_only)
+    }
+
+    fn queue_hover(&mut self) {
+        if !self.hover && !self.hover_pending {
+            self.hover_pending = true;
+            self.dodge = false;
+            self.track_leave();
+            unsafe { SetTimer(self.hwnd, TIMER_HOVER, HOVER_DELAY_MS, None); }
+        }
+    }
+
+    fn navigate_to(&mut self, page: usize) {
+        if self.page == page { return; }
+        self.navigation_hover = Some(self.island());
+        self.page = page;
+        unsafe { SetTimer(self.hwnd, TIMER_NAV_HOVER, DODGE_MS, None); }
+    }
+
+    fn check_navigation_hover(&mut self) {
+        let Some(previous) = self.navigation_hover else { return; };
+        let cursor = occlusion::cursor();
+        let x = (cursor.x - self.origin.x) as f32 / self.g.scale;
+        let y = (cursor.y - self.origin.y) as f32 / self.g.scale;
+        match occlusion::navigation_hover(previous, self.island(), x, y, self.animating) {
+            occlusion::NavigationHover::Hold => return,
+            occlusion::NavigationHover::Entered => self.start_hover(),
+            occlusion::NavigationHover::Left => self.hover = false,
+        }
+        self.navigation_hover = None;
+        unsafe { let _ = KillTimer(self.hwnd, TIMER_NAV_HOVER); }
+        self.retarget();
+        self.render();
     }
 
     /// Selama ada jendela di belakang notch: minggir saat kursor mengarah ke sana.
     fn check_dodge(&mut self) {
-        let dodge = self.covered && !self.is_open() && self.cursor_wants_behind();
+        if (self.covered || self.settings.borrow().minimal) && self.hover && !self.cursor_over_notch()
+            && self.navigation_hover.is_none() && self.notch_drag.is_none() && self.pointer_page.is_none() {
+            self.hover = false;
+            self.alert = false;
+            self.retarget();
+        }
+        if self.hover_pending && !self.cursor_over_notch() {
+            self.hover_pending = false;
+            unsafe { let _ = KillTimer(self.hwnd, TIMER_HOVER); }
+        }
+        // When covered, only the top edge expresses intent to open Amora.
+        // Everywhere else in the compact slot belongs to the app behind it.
+        if (self.covered || self.settings.borrow().minimal) && !self.is_open() && self.cursor_over_notch() { self.queue_hover(); }
+        let dodge = self.covered && !self.is_open() && !self.hover_pending && self.cursor_wants_behind();
         if dodge != self.dodge {
             self.dodge = dodge;
             self.retarget();
@@ -277,12 +339,12 @@ impl App {
 
     fn open_size(&self) -> (f32, f32) {
         let (w, h) = self.modules[self.page].expanded_size();
-        // Cukup lebar supaya semua nama halaman muat.
-        let tabs_w = self.tabs().len() as f32 * TAB_W + 24.0;
         let max_w = self.monitor.as_ref().map_or(CANVAS_W - 16.0, |m| (m.rect.right - m.rect.left) as f32 / self.g.scale - 16.0);
-        let max_h = self.monitor.as_ref().map_or(CANVAS_H - 4.0, |m| (m.rect.bottom - m.rect.top) as f32 / self.g.scale - 8.0);
-        (w.max(MIN_OPEN_W).max(tabs_w).min(max_w).min(CANVAS_W - 16.0),
-            (h + TAB_H + GRIP_H).min(max_h).min(CANVAS_H - 4.0))
+        let max_h = self.g.px_h as f32 / self.g.scale - 4.0;
+        let nav_width = self.tabs().len() as f32 * theme::NAV_CELL + 24.0;
+        let width = w.max(MIN_OPEN_W).max(456.0).max(nav_width).min(max_w).min(CANVAS_W - 16.0);
+        let nav = theme::nav_rows(width, self.tabs().len()) as f32 * TAB_H + 10.0 + theme::NAV_GAP;
+        (width, (h + nav + GRIP_H).min(max_h))
     }
 
     fn retarget(&mut self) {
@@ -353,7 +415,7 @@ impl App {
         {
             let scale = monitor.scale;
             let pw = (CANVAS_W * scale).round() as i32;
-            let ph = (CANVAS_H * scale).round() as i32;
+            let ph = monitor.rect.bottom - monitor.rect.top;
             self.origin = monitors::top_center(monitor.rect, pw);
             if dev_instance() {
                 // `AMORA_DEV_X=<piksel>` menggeser instance uji ke tempat lain (layar sempit).
@@ -406,12 +468,19 @@ impl App {
 
     fn island(&self) -> Rect {
         let (w, h) = (self.w.value, self.h.value);
-        Rect::new((CANVAS_W - w) / 2.0, 0.0, w, h)
+        let compact = self.compact_size().1;
+        let progress = anim::expansion_progress(h, compact, self.open_size().1, self.navigation_hover.is_some());
+        // The compact player floats as one black capsule, then rejoins the top
+        // edge while opening. A hidden/minimal notch still reaches the edge.
+        let gap = 6.0 * (1.0 - progress * 2.0).max(0.0)
+            * ((h - LINE_H) / (compact - LINE_H).max(1.0)).clamp(0.0, 1.0);
+        Rect::new((CANVAS_W - w) / 2.0, gap, w, h)
     }
 
     fn content(&self) -> Rect {
         let i = self.island();
-        Rect::new(i.x, i.y + GRIP_H, i.w, (i.h - TAB_H - GRIP_H).max(0.0))
+        let nav = theme::nav_rows(self.open_size().0, self.tabs().len()) as f32 * TAB_H + 10.0 + theme::NAV_GAP;
+        Rect::new(i.x, i.y + GRIP_H, i.w, (i.h - nav - GRIP_H).max(0.0))
     }
 
     fn render(&mut self) {
@@ -427,21 +496,33 @@ impl App {
             return;
         }
         let island = self.island();
+        let appearance = self.settings.borrow().appearance.clone();
+        // A one-byte alpha floor retains layered-window hit testing at 100%.
+        let material_alpha = appearance.tint_alpha().max(0.004);
+        let capability = Event::Material(self.g.backdrop_error.clone());
+        self.modules[self.page].on_event(&capability);
+        let (_, ch) = self.compact_size();
+        let (_, eh) = self.open_size();
+        let p = anim::expansion_progress(island.h, ch, eh, self.navigation_hover.is_some());
+        let expanded = p >= 0.5;
         // Sudut atas menempel di tepi layar, hanya sudut bawah yang membulat.
         let radius = (island.h * 0.5).min(22.0);
-        self.g.fill_rrect(Rect::new(island.x, -radius, island.w, island.h + radius), radius, BLACK);
+        let surface = Rect::new(island.x, -radius, island.w, island.h + radius);
+        if expanded {
+            self.g.glass(surface, radius, material_alpha);
+            self.g.stroke_rrect(surface, radius, 0.7, Color(0.68, 0.69, 0.84, 0.24));
+        } else {
+            self.g.fill_rrect(island, radius, Color(0.035, 0.035, 0.04, 1.0));
+        }
         // Telinga cekung di kiri-kanan, supaya notch tampak tumbuh dari tepi layar.
         // Mengecil bersama notch (garis tipis, bersembunyi).
         let ear = (island.h * 0.35).min(EAR_R);
-        if ear >= 1.0 {
-            self.g.ear(island.x, ear, true, BLACK);
-            self.g.ear(island.x + island.w, ear, false, BLACK);
+        if expanded && ear >= 1.0 {
+            let edge = Color(0.125, 0.13, 0.15, material_alpha);
+            self.g.ear(island.x, ear, true, edge);
+            self.g.ear(island.x + island.w, ear, false, edge);
         }
 
-        let (_, ch) = self.compact_size();
-        let (_, eh) = self.open_size();
-        let p = ((island.h - ch) / (eh - ch).abs().max(1.0)).clamp(0.0, 1.0);
-        let expanded = p >= 0.5;
         let badge = self.badge();
         self.g.push_clip(island);
         self.tab_hits.clear();
@@ -470,14 +551,21 @@ impl App {
         } else {
             self.g.alpha = (p - 0.5) * 2.0;
             let content = self.content();
+            // Keep a local contrast surface beneath content, independently of the
+            // surrounding glass tint. Foreground opacity never follows the slider.
+            self.g.fill_rrect(Rect::new(content.x + 10.0, content.y, content.w - 20.0, content.h),
+                16.0, Color(0.035, 0.04, 0.05, 0.72));
+            self.g.push_clip(content);
             self.modules[self.page].draw_expanded(&mut self.g, content);
-            self.draw_tabs(Rect::new(island.x, content.y + content.h, island.w, TAB_H));
+            self.g.pop_clip();
+            self.draw_tabs(Rect::new(island.x, content.y + content.h + theme::NAV_GAP,
+                island.w, island.h - content.h - GRIP_H - theme::NAV_GAP));
             let grip = self.grip();
             self.g.fill_rrect(Rect::new(grip.x + 12.0, 4.0, grip.w - 24.0, 3.0), 1.5, DIM);
         }
         self.g.alpha = 1.0;
         self.g.pop_clip();
-        let _ = self.g.end(self.hwnd, self.origin);
+        let _ = self.g.end(self.hwnd, self.origin, island, if expanded { appearance.blur } else { 0 });
 
         let tick = if expanded {
             self.modules[self.page].tick_ms(true)
@@ -500,13 +588,16 @@ impl App {
 
     fn draw_tabs(&mut self, r: Rect) {
         let tabs = self.tabs();
-        let w = TAB_W.min((r.w - 12.0) / tabs.len().max(1) as f32);
-        let x0 = r.x + (r.w - w * tabs.len() as f32) / 2.0;
-        for (k, &i) in tabs.iter().enumerate() {
-            let tr = Rect::new(x0 + k as f32 * w, r.y, w, r.h - 6.0);
-            let name = self.modules[i].tab().unwrap_or("");
-            let (c, wt) = if i == self.page { (WHITE, 600) } else { (DIM, 400) };
-            self.g.text(name, tr, 12.0, wt, c, Align::Center);
+        let width = (tabs.len() as f32 * theme::NAV_CELL).min(r.w - 24.0);
+        self.g.fill_rrect(Rect::new(r.x + (r.w - width) / 2.0, r.y, width, r.h - 8.0),
+            16.0, Color(0.055, 0.06, 0.075, 0.82));
+        let rects = theme::nav_rects(r, tabs.len(), self.open_size().0);
+        for (tr, &i) in rects.into_iter().zip(&tabs) {
+            let button = Rect::new(tr.x + (tr.w - 32.0) / 2.0, tr.y + (tr.h - 32.0) / 2.0, 32.0, 32.0);
+            self.g.fill_rrect(button, 10.0, if i == self.page { theme::SELECTED } else { theme::SURFACE });
+            if i == self.page { self.g.stroke_rrect(button, 10.0, 0.7, Color(0.7, 0.69, 0.9, 0.3)); }
+            theme::draw_icon(&mut self.g, self.modules[i].tab().unwrap_or(""), tr,
+                if i == self.page { theme::ACCENT } else { DIM });
             self.tab_hits.push((tr, i));
         }
     }
@@ -657,8 +748,9 @@ impl App {
         }
         if auto_hide != self.auto_hide {
             self.auto_hide = auto_hide;
-            self.recheck_covered();
         }
+        self.recheck_covered();
+        if self.hover { self.track_leave(); }
         // Halaman yang sedang dibuka bisa hilang (mis. Clipboard dimatikan).
         if self.modules[self.page].tab().is_none() {
             self.page = self.tabs().first().copied().unwrap_or(0);
@@ -673,6 +765,10 @@ impl App {
 
     fn handle(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         match msg {
+            WM_PAINT => {
+                unsafe { let _ = ValidateRect(self.hwnd, None); }
+                self.render();
+            }
             WM_MOUSEMOVE if self.notch_drag.is_some() => {
                 let mut pt = POINT::default();
                 unsafe { let _ = GetCursorPos(&mut pt); }
@@ -696,6 +792,13 @@ impl App {
                 self.render();
             }
             WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize && self.notch_drag.is_some() => self.finish_notch_drag(false),
+            WM_KEYDOWN if wp.0 == VK_ESCAPE.0 as usize && self.pointer_page.is_some() => {
+                if let Some(i) = self.pointer_page.take() { self.modules[i].cancel_pointer(); }
+                self.suppress_up = true;
+                self.set_editing(false);
+                unsafe { let _ = ReleaseCapture(); }
+                self.sync_hover_after_capture(); self.retarget(); self.render();
+            }
             WM_CAPTURECHANGED | WM_CANCELMODE => {
                 self.finish_notch_drag(false);
                 if let Some(i) = self.pointer_page.take() {
@@ -709,13 +812,8 @@ impl App {
                 }
                 self.press = None;
             }
-            // Ada tab di belakang notch dan kursor datang dari bawah: minggir, jangan dibuka.
-            // Untuk membuka notch, tempelkan kursor ke tepi paling atas layar.
-            WM_MOUSEMOVE if !self.hover && self.auto_hide && self.covered && !self.is_open() && self.cursor_wants_behind() => {
-                if !self.dodge {
-                    self.dodge = true;
-                    self.retarget();
-                }
+            WM_MOUSEMOVE if self.covered && !self.is_open() && self.cursor_wants_behind() => {
+                self.check_dodge();
             }
             WM_MOUSEMOVE => {
                 if self.is_open() && !self.hover {
@@ -723,10 +821,8 @@ impl App {
                     self.hover_pending = false;
                     self.start_hover();
                     self.retarget();
-                } else if !self.hover && !self.hover_pending {
-                    self.hover_pending = true;
-                    self.track_leave();
-                    unsafe { SetTimer(self.hwnd, TIMER_HOVER, HOVER_DELAY_MS, None) };
+                } else if !self.hover && !self.hover_pending && self.cursor_over_notch() {
+                    self.queue_hover();
                 }
                 // Tombol kiri ditahan dan digeser: mulai seret file keluar.
                 if let Some((px, py)) = self.press {
@@ -769,6 +865,10 @@ impl App {
                 } else { self.press = Some((x, y)); }
             }
             WM_MOUSELEAVE if self.notch_drag.is_some() || self.pointer_page.is_some() => {}
+            // Keep a top-edge reveal alive while the panel grows under the
+            // cursor. The pointer timer also owns leave detection in this mode.
+            WM_MOUSELEAVE if (self.hover_pending || self.covered || self.settings.borrow().minimal)
+                && self.cursor_over_notch() => {}
             WM_MOUSELEAVE => {
                 if std::mem::take(&mut self.hover_pending) {
                     unsafe {
@@ -793,7 +893,7 @@ impl App {
                     if self.editing {
                         self.modules[self.page].stop_editing();
                     }
-                    self.page = i;
+                    self.navigate_to(i);
                 } else {
                     let content = self.content();
                     if !self.modules[self.page].click(content, x, y) {
@@ -821,7 +921,7 @@ impl App {
                 let k = tabs.iter().position(|&i| i == self.page).unwrap_or(0);
                 let up = (wp.0 >> 16) as i16 > 0;
                 let n = tabs.len();
-                self.page = tabs[if up { (k + n - 1) % n } else { (k + 1) % n }];
+                self.navigate_to(tabs[if up { (k + n - 1) % n } else { (k + 1) % n }]);
                 self.retarget();
                 self.render();
             }
@@ -876,18 +976,22 @@ impl App {
                 self.recheck_covered();
             }
             WM_TIMER if wp.0 == TIMER_DODGE => self.check_dodge(),
+            WM_TIMER if wp.0 == TIMER_NAV_HOVER => self.check_navigation_hover(),
             WM_TIMER if wp.0 == TIMER_HOVER => {
                 unsafe {
                     let _ = KillTimer(self.hwnd, TIMER_HOVER);
                 }
                 // Masih di atas notch (WM_MOUSELEAVE belum datang) dan tidak sedang minggir.
-                if std::mem::take(&mut self.hover_pending) && !self.hover && !self.dodge {
+                if std::mem::take(&mut self.hover_pending) && !self.hover && self.cursor_over_notch() {
+                    self.dodge = false;
                     if !self.is_open() && self.modules[self.current].tab().is_some() {
                         // Buka di halaman yang sedang tampil di notch tertutup.
                         self.page = self.current;
                     }
                     self.start_hover();
                     self.retarget();
+                } else {
+                    self.check_dodge();
                 }
             }
             WM_TIMER if wp.0 == TIMER_ALERT => {
@@ -1009,6 +1113,7 @@ const CMD_MASCOT: usize = 4;
 const CMD_MINIMAL: usize = 5;
 const CMD_CLIPBOARD: usize = 6;
 const CMD_PRIMARY: usize = 7;
+const CMD_APPEARANCE: usize = 8;
 
 /// Menu yang sama untuk klik kanan notch dan klik ikon tray.
 fn show_menu(hwnd: HWND) {
@@ -1026,6 +1131,7 @@ fn show_menu(hwnd: HWND) {
         let _ = AppendMenuW(menu, MF_STRING | check(minimal), CMD_MINIMAL, w!("Notch minimal"));
         let _ = AppendMenuW(menu, MF_STRING | check(clip), CMD_CLIPBOARD, w!("Riwayat clipboard"));
         let _ = AppendMenuW(menu, MF_STRING, CMD_PRIMARY, w!("Kembalikan ke monitor utama"));
+        let _ = AppendMenuW(menu, MF_STRING, CMD_APPEARANCE, w!("Pulihkan tampilan awal"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(menu, MF_STRING, CMD_ABOUT, w!("Tentang Amora"));
         let _ = AppendMenuW(menu, MF_STRING, CMD_EXIT, w!("Keluar"));
@@ -1041,6 +1147,10 @@ fn show_menu(hwnd: HWND) {
                 let _ = DestroyWindow(hwnd);
             }
             CMD_AUTOSTART => autostart::set(!auto),
+            CMD_APPEARANCE => with_app(|a| {
+                { let mut s = a.settings.borrow_mut(); s.appearance = Default::default(); s.save(); }
+                a.apply_settings(); a.retarget(); a.render();
+            }),
             CMD_PRIMARY => with_app(|a| {
                 a.finish_notch_drag(false);
                 {
@@ -1192,10 +1302,11 @@ fn main() -> Result<()> {
     unsafe { let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2); }
     // Untuk pengembangan: `cargo run -- --probe-lyrics "<judul>" "<artis>" <durasi>`
     let args: Vec<String> = std::env::args().collect();
-    if args.get(1).map(String::as_str) == Some("--preview-controls") {
+    if args.get(1).is_some_and(|s| s == "--preview-controls" || s == "--preview-prism" || s == "--preview-hover") {
         std::env::set_var("AMORA_DEV", "1");
-        std::env::set_var("AMORA_FORCE_OPEN", "1");
-        std::env::set_var("AMORA_PAGE", "Kontrol");
+        if args[1] != "--preview-hover" { std::env::set_var("AMORA_FORCE_OPEN", "1"); }
+        let page = if args[1] != "--preview-controls" { args.get(2).map(String::as_str).unwrap_or("Setelan") } else { "Kontrol" };
+        std::env::set_var("AMORA_PAGE", page);
         std::env::set_var("AMORA_DEV_X", "0");
         if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.join("amora-preview-data"))) {
             std::env::set_var("AMORA_DATA_DIR", dir);
@@ -1269,7 +1380,9 @@ fn main() -> Result<()> {
     unsafe {
         // Satu instance saja.
         // `AMORA_DEV=1`: instance uji yang boleh jalan berdampingan (digeser ke kanan).
-        let _mutex = CreateMutexW(None, true, w!("Local\\AmoraNotch"))?;
+        // Preview instances must not request access to the production mutex.
+        let _mutex = if dev_instance() { CreateMutexW(None, true, None)? }
+            else { CreateMutexW(None, true, w!("Local\\AmoraNotch"))? };
         if GetLastError() == ERROR_ALREADY_EXISTS && !dev_instance() {
             return Ok(());
         }
@@ -1288,7 +1401,7 @@ fn main() -> Result<()> {
         RegisterClassW(&wc);
         // Expose the dedicated preview as a normal app window so UI test tools
         // can discover it; production remains a non-activating tray/tool window.
-        let preview = args.get(1).map(String::as_str) == Some("--preview-controls");
+        let preview = args.get(1).is_some_and(|s| s == "--preview-controls" || s == "--preview-prism" || s == "--preview-hover");
         let flags = WS_EX_LAYERED | WS_EX_TOPMOST | if preview { WS_EX_APPWINDOW } else { WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE };
         let hwnd = CreateWindowExW(
             flags,
@@ -1338,6 +1451,7 @@ fn main() -> Result<()> {
             page: 0,
             hover: false,
             hover_pending: false,
+            navigation_hover: None,
             alert: false,
             editing: false,
             tab_hits: Vec::new(),
@@ -1378,9 +1492,10 @@ fn main() -> Result<()> {
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         // A hidden launcher STARTUPINFO overrides the first ShowWindow call.
         // Explicit preview mode must still expose its test window.
-        if args.get(1).map(String::as_str) == Some("--preview-controls") {
+        if preview {
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         }
+        with_app(|a| { a.g.enable_backdrop(a.hwnd); a.render(); });
         tray::add(hwnd);
         system::watch_power(hwnd);
         keyboard::spawn(hwnd);

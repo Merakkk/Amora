@@ -10,7 +10,7 @@ use crate::settings::{load_json, save_json};
 use crate::time::{day, minute_of_day, now_ms, weekday, MIN};
 
 const FILE: &str = "schedule.json";
-const ACCENT: Color = Color(0.55, 0.7, 1.0, 1.0);
+const ACCENT: Color = crate::theme::ACCENT;
 const NOW_BG: Color = Color(0.55, 0.7, 1.0, 0.16);
 const ROW: f32 = 26.0;
 const MAX_ROWS: usize = 6;

@@ -17,7 +17,7 @@ use crate::settings::SharedSettings;
 const MAX_ITEMS: usize = 5;
 const ROW: f32 = 26.0;
 const COPIED_FOR: Duration = Duration::from_millis(1200);
-const ACCENT: Color = Color(0.35, 0.85, 0.55, 1.0);
+const ACCENT: Color = crate::theme::ACCENT;
 
 struct Item {
     text: String,

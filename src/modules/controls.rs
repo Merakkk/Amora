@@ -4,7 +4,7 @@ use super::{Event, Module};
 use crate::{brightness, mixer, monitors::Monitor, system};
 use crate::gfx::{Align, Gfx, Rect, DIM, FAINT, WHITE, Color};
 
-const ACCENT: Color = Color(0.35, 0.85, 0.55, 1.0);
+const ACCENT: Color = crate::theme::ACCENT;
 const ROW: f32 = 43.0;
 const LIST_HEIGHT: f32 = 129.0;
 #[derive(Clone)]
@@ -34,7 +34,7 @@ pub struct Controls {
 fn fraction(x: f32, r: Rect) -> f32 { ((x - r.x) / r.w.max(1.0)).clamp(0.0, 1.0) }
 
 fn panel_height(apps: usize, error: bool) -> f32 {
-    161.0 + apps.clamp(1, 3) as f32 * ROW + if error { 26.0 } else { 8.0 }
+    218.0 + apps.clamp(1, 3) as f32 * ROW + if error { 26.0 } else { 8.0 }
 }
 
 impl Controls {
@@ -110,12 +110,14 @@ impl Controls {
         self.read_audio();
     }
     fn row(&mut self, g: &mut Gfx, r: Rect, label: &str, level: Option<f32>, muted: Option<bool>, mixed: bool, target: Target) {
+        let primary = matches!(&target, Target::Master | Target::Brightness);
         let label_width = (r.w * 0.34).min(175.0);
-        g.text(label, Rect::new(r.x, r.y, label_width, r.h), 12.0, 400, WHITE, Align::Left);
+        g.text(label, Rect::new(r.x, r.y, if primary { r.w - 64.0 } else { label_width }, if primary { 24.0 } else { r.h }), 13.0, 400, WHITE, Align::Left);
         let mute_w = if muted.is_some() { 42.0 } else { 0.0 };
         let value_w = if mixed { 68.0 } else { 42.0 };
-        let track = Rect::new(r.x + label_width + 8.0, r.y + 12.0,
-            (r.w - label_width - 18.0 - value_w - mute_w).max(12.0), 20.0);
+        let track = if primary { Rect::new(r.x, r.y + 27.0, r.w - mute_w - if muted.is_some() { 12.0 } else { 0.0 }, 28.0) }
+            else { Rect::new(r.x + label_width + 8.0, r.y + 9.0,
+            (r.w - label_width - 18.0 - value_w - mute_w).max(12.0), 28.0) };
         let bar = Rect::new(track.x, track.y + 8.0, track.w, 4.0);
         g.fill_rrect(bar, 2.0, FAINT);
         if let Some(v) = level {
@@ -124,11 +126,13 @@ impl Controls {
             self.hits.push((track, Hit::Slider(target.clone(), track)));
         }
         let text = if mixed { "Campuran".into() } else { level.map_or("—".into(), |v| format!("{}%", (v * 100.0).round() as u32)) };
-        g.text(&text, Rect::new(track.x + track.w + 5.0, r.y, value_w, r.h), 11.0, 400, DIM, Align::Center);
+        let value = if primary { Rect::new(r.x + r.w - 64.0, r.y, 64.0, 24.0) }
+            else { Rect::new(track.x + track.w + 5.0, r.y, value_w, r.h) };
+        g.text(&text, value, 11.0, 400, DIM, Align::Right);
         if let Some(muted) = muted {
-            let button = Rect::new(r.x + r.w - 38.0, r.y + 9.0, 38.0, 25.0);
-            g.fill_rrect(button, 6.0, FAINT);
-            g.text(if muted { "Bisu" } else { "Suara" }, button, 10.0, 400, WHITE, Align::Center);
+            let button = Rect::new(r.x + r.w - 36.0, r.y + if primary { 25.0 } else { 5.0 }, 36.0, 32.0);
+            g.fill_rrect(button, 10.0, if muted { crate::theme::SELECTED } else { crate::theme::SURFACE });
+            g.icon(if muted { '\u{E74F}' } else { '\u{E767}' }, button, 16.0, WHITE);
             self.hits.push((button, Hit::Mute(target, !muted)));
         }
     }
@@ -139,25 +143,26 @@ impl Module for Controls {
     fn tab(&self) -> Option<&'static str> { Some("Kontrol") }
     fn prepare(&mut self) { self.refresh(); }
     fn expanded_size(&self) -> (f32, f32) {
-        (560.0, panel_height(self.snapshot.as_ref().map_or(0, |s| s.apps.len()), self.error.is_some()))
+        (612.0, panel_height(self.snapshot.as_ref().map_or(0, |s| s.apps.len()), self.error.is_some()))
     }
     fn tick_ms(&self, expanded: bool) -> Option<u32> { expanded.then_some(100) }
     fn draw_expanded(&mut self, g: &mut Gfx, r: Rect) {
         self.hits.clear();
         let x = r.x + 20.0;
-        let w = (r.w - 40.0).max(150.0);
-        g.text("Kontrol", Rect::new(x, r.y + 5.0, w, 24.0), 15.0, 600, WHITE, Align::Left);
+        let w = (r.w - 40.0).max(1.0);
+        g.text("Kontrol", Rect::new(x, r.y + 8.0, w, 28.0), 20.0, 600, WHITE, Align::Left);
         let master = self.master;
-        self.row(g, Rect::new(x, r.y + 30.0, w, ROW), "Volume utama", master.map(|v| v.0), master.map(|v| v.1), false, Target::Master);
-        self.row(g, Rect::new(x, r.y + 73.0, w, ROW), "Kecerahan", self.bright_requested.or(self.bright_value).map(|v| v as f32 / 100.0), None, false, Target::Brightness);
+        self.row(g, Rect::new(x, r.y + 45.0, w, 64.0), "Volume utama", master.map(|v| v.0), master.map(|v| v.1), false, Target::Master);
+        self.row(g, Rect::new(x, r.y + 112.0, w, 64.0), "Kecerahan", self.bright_requested.or(self.bright_value).map(|v| v as f32 / 100.0), None, false, Target::Brightness);
         let monitor = self.monitor.as_ref().map(|m| format!("{} ({})", m.name, m.device)).unwrap_or_else(|| "Monitor".into());
         let subtitle = if self.bright_value.is_some() { monitor }
             else if !self.bright_checked { format!("{monitor} · Membaca kecerahan…") }
-            else { format!("{monitor} · Kecerahan monitor ini tidak tersedia") };
-        g.text(&subtitle, Rect::new(x, r.y + 112.0, w, 20.0), 10.0, 400, DIM, Align::Left);
-        g.text("Aplikasi · output utama Windows", Rect::new(x, r.y + 138.0, w, 20.0), 11.0, 600, DIM, Align::Left);
+            else { format!("Kecerahan monitor ini tidak tersedia · {monitor}") };
+        g.text(&subtitle, Rect::new(x, r.y + 169.0, w, 20.0), 11.0, 400, DIM, Align::Left);
+        g.fill_rect(Rect::new(x, r.y + 195.0, w, 1.0), crate::theme::SURFACE);
+        g.text("Aplikasi · output utama Windows", Rect::new(x, r.y + 198.0, w, 20.0), 11.0, 600, DIM, Align::Left);
         let footer = if self.error.is_some() { 26.0 } else { 8.0 };
-        self.list = Rect::new(x, r.y + 161.0, w, LIST_HEIGHT.min((r.h - 161.0 - footer).max(ROW)));
+        self.list = Rect::new(x, r.y + 218.0, w, LIST_HEIGHT.min((r.h - 218.0 - footer).max(ROW)));
         let apps = self.snapshot.as_ref().map(|s| s.apps.clone()).unwrap_or_default();
         let visible = self.visible_rows();
         self.offset = self.offset.min(apps.len().saturating_sub(visible));

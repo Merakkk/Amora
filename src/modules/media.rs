@@ -14,10 +14,10 @@ use crate::lyrics::{Line, Lyrics, LyricsService, State};
 use crate::media::{MediaCmd, MediaHandle, MediaInfo, Shared};
 use crate::settings::{load_json, save_json, SharedSettings};
 
-const ACCENT: Color = Color(0.35, 0.85, 0.55, 1.0);
-const PLAYER_W: f32 = 420.0;
+const ACCENT: Color = crate::theme::ACCENT;
+const PLAYER_W: f32 = 612.0;
 const LYRICS_W: f32 = 300.0;
-const HEIGHT: f32 = 136.0;
+const HEIGHT: f32 = 232.0;
 /// Baris lirik dimajukan sedikit supaya terasa pas dengan suara.
 const LEAD: f64 = 0.15;
 const ROW_H: f32 = 22.0;
@@ -59,6 +59,11 @@ pub struct MediaModule {
     last_line: Option<usize>,
     line_anim: Option<Instant>,
     sleep: Option<Sleep>,
+    sleep_menu: bool,
+    sleep_minutes: u32,
+    sleep_action: SleepAction,
+    sleep_notice: Option<String>,
+    shutdown_result: Option<std::sync::mpsc::Receiver<Result<bool, String>>>,
     marquee: Option<Marquee>,
     /// Lagu palsu untuk pengembangan (`AMORA_DEMO_LYRIC`); abaikan SMTC.
     demo: bool,
@@ -89,25 +94,50 @@ impl Marquee {
 /// Sleep timer: musik dijeda saat `end`, volume memudar selama `FADE` terakhir.
 struct Sleep {
     end: Instant,
-    minutes: u32,
+    action: SleepAction,
     /// Volume sebelum memudar, untuk dikembalikan setelah musik dijeda.
     fade_from: Option<f32>,
     /// Musik sudah dijeda; kembalikan volume pada waktu ini.
     restore_at: Option<Instant>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SleepAction { Pause, Shutdown }
+
+impl Sleep {
+    fn new(now: Instant, minutes: u32, action: SleepAction) -> Self {
+        Self { end: now + Duration::from_secs(minutes as u64 * 60), action,
+            fade_from: None, restore_at: None }
+    }
+
+    fn finish_action(&self, now: Instant) -> Option<SleepAction> {
+        self.restore_at.filter(|&at| now >= at).map(|_| self.action)
+    }
+}
+
 impl Drop for MediaModule {
     /// Amora ditutup di tengah volume memudar: kembalikan volumenya.
     fn drop(&mut self) {
-        if let Some(Sleep { fade_from: Some(v), .. }) = self.sleep.take() {
-            crate::system::set_master_volume(v);
-        }
+        self.cancel_sleep();
     }
 }
 
 const SLEEP_PRESETS: [u32; 3] = [15, 30, 60];
 const FADE: Duration = Duration::from_secs(10);
 const FADE_STEP_MS: u32 = 400;
+const SLEEP_PANEL_H: f32 = 156.0;
+
+fn sleep_buttons(r: Rect) -> [Rect; 7] {
+    let x = r.x + 24.0;
+    let y = r.y + HEIGHT + 8.0;
+    let w = (r.w - 48.0).max(1.0);
+    let third = (w - 16.0) / 3.0;
+    let half = (w - 8.0) / 2.0;
+    [Rect::new(x, y, third, 28.0), Rect::new(x + third + 8.0, y, third, 28.0),
+        Rect::new(x + 2.0 * (third + 8.0), y, third, 28.0),
+        Rect::new(x, y + 36.0, half, 30.0), Rect::new(x + half + 8.0, y + 36.0, half, 30.0),
+        Rect::new(x, y + 76.0, half, 30.0), Rect::new(x + half + 8.0, y + 76.0, half, 30.0)]
+}
 
 struct Layout {
     art: Rect,
@@ -124,22 +154,23 @@ struct Layout {
 
 /// `r` adalah area pemutar (bagian kiri notch).
 fn layout(r: Rect) -> Layout {
-    let art = Rect::new(r.x + 16.0, r.y + 14.0, 72.0, 72.0);
-    let tx = art.x + art.w + 14.0;
-    let tw = r.x + r.w - 16.0 - tx;
-    let by = r.y + 72.0;
-    let btn = |i: f32| Rect::new(tx - 4.0 + i * 40.0, by - 15.0, 30.0, 30.0);
+    let size = if r.w >= 480.0 { 108.0 } else { 72.0 };
+    let art = Rect::new(r.x + 24.0, r.y + 20.0, size, size);
+    let tx = art.x + art.w + 20.0;
+    let tw = (r.x + r.w - 24.0 - tx).max(1.0);
+    let by = r.y + 143.0;
+    let btn = |i: f32| Rect::new(r.x + r.w / 2.0 - 89.0 + i * 66.0, by - 20.0, 46.0, 40.0);
     Layout {
         art,
-        title: Rect::new(tx, r.y + 16.0, tw, 22.0),
-        artist: Rect::new(tx, r.y + 38.0, tw, 18.0),
+        title: Rect::new(tx, r.y + 28.0, tw, 34.0),
+        artist: Rect::new(tx, r.y + 68.0, tw, 22.0),
         prev: btn(0.0),
         play: btn(1.0),
         next: btn(2.0),
-        lyr: Rect::new(r.x + r.w - 16.0 - 30.0, by - 15.0, 30.0, 30.0),
-        sleep: Rect::new(r.x + r.w - 16.0 - 30.0 - 84.0, by - 15.0, 80.0, 30.0),
-        bar: Rect::new(r.x + 16.0, r.y + 100.0, r.w - 32.0, 4.0),
-        times: Rect::new(r.x + 16.0, r.y + 108.0, r.w - 32.0, 16.0),
+        lyr: Rect::new(r.x + r.w - 54.0, r.y + 140.0, 30.0, 30.0),
+        sleep: Rect::new(tx, r.y + 96.0, tw, 26.0),
+        bar: Rect::new(r.x + 24.0, r.y + 187.0, r.w - 48.0, 4.0),
+        times: Rect::new(r.x + 24.0, r.y + 200.0, r.w - 48.0, 20.0),
     }
 }
 
@@ -184,6 +215,11 @@ impl MediaModule {
             last_line: None,
             line_anim: None,
             sleep: None,
+            sleep_menu: false,
+            sleep_minutes: 15,
+            sleep_action: SleepAction::Pause,
+            sleep_notice: None,
+            shutdown_result: None,
             marquee: None,
             demo: false,
         };
@@ -209,6 +245,80 @@ impl MediaModule {
 
     fn lyrics_on(&self) -> bool {
         self.settings.borrow().lyrics
+    }
+
+    fn cancel_sleep(&mut self) {
+        if let Some(sleep) = self.sleep.take() {
+            if !self.demo {
+                if let Some(volume) = sleep.fade_from { crate::system::set_master_volume(volume); }
+                crate::system::set_quiet(false);
+            }
+        }
+    }
+
+    fn draw_sleep(&self, g: &mut Gfx, r: Rect, button: Rect) {
+        let label = match &self.sleep {
+            Some(s) => {
+                let left = s.end.saturating_duration_since(Instant::now()).as_secs();
+                format!("{} {}:{:02}", if s.action == SleepAction::Shutdown { "⏻ Shutdown" } else { "☾ Tidur" }, left / 60, left % 60)
+            }
+            None => "☾ Tidur".into(),
+        };
+        g.text(&label, button, 12.0, 500, if self.sleep.is_some() { ACCENT } else { DIM }, Align::Right);
+        if !self.sleep_menu { return; }
+        let buttons = sleep_buttons(r);
+        for (i, minutes) in SLEEP_PRESETS.iter().enumerate() {
+            let selected = self.sleep_minutes == *minutes;
+            g.button(buttons[i], &format!("{minutes} menit"), if selected { ACCENT } else { crate::theme::SURFACE },
+                if selected { crate::theme::INK } else { WHITE });
+        }
+        for (index, action, label) in [(3, SleepAction::Pause, "Musik saja"), (4, SleepAction::Shutdown, "Musik + shutdown")] {
+            let selected = self.sleep_action == action;
+            g.button(buttons[index], label, if selected { ACCENT } else { crate::theme::SURFACE },
+                if selected { crate::theme::INK } else { WHITE });
+        }
+        let start = if self.shutdown_result.is_some() { "Memproses…" } else if self.sleep.is_some() { "Mulai ulang timer" } else { "Mulai timer" };
+        g.button(buttons[5], start, crate::theme::SURFACE, WHITE);
+        g.button(buttons[6], "Batalkan timer", crate::theme::SURFACE, DIM);
+        let hint = self.sleep_notice.as_deref().unwrap_or(if self.sleep_action == SleepAction::Shutdown {
+            "Simpan pekerjaan. Shutdown tidak memaksa aplikasi ditutup."
+        } else { "Musik memudar selama 10 detik terakhir, lalu dijeda." });
+        g.text(hint, Rect::new(r.x + 24.0, r.y + HEIGHT + 122.0, r.w - 48.0, 26.0), 11.0, 400, DIM, Align::Left);
+    }
+
+    fn click_sleep(&mut self, r: Rect, x: f32, y: f32) -> bool {
+        if layout(r).sleep.contains(x, y) {
+            self.sleep_menu = !self.sleep_menu;
+            return true;
+        }
+        if !self.sleep_menu { return false; }
+        let buttons = sleep_buttons(r);
+        let Some(index) = buttons.iter().position(|button| button.contains(x, y)) else { return false; };
+        if self.shutdown_result.is_some() { return true; }
+        match index {
+            0..=2 => self.sleep_minutes = SLEEP_PRESETS[index],
+            3 => self.sleep_action = SleepAction::Pause,
+            4 => self.sleep_action = SleepAction::Shutdown,
+            5 => {
+                self.cancel_sleep();
+                let mut timer = Sleep::new(Instant::now(), self.sleep_minutes, self.sleep_action);
+                // Accelerated preview remains dry-run for audio and device power.
+                if self.demo && crate::dev_instance() {
+                    if let Some(seconds) = std::env::var("AMORA_TEST_SLEEP_SECONDS").ok().and_then(|s| s.parse::<u64>().ok()) {
+                        timer.end = Instant::now() + Duration::from_secs(seconds.clamp(1, 60));
+                    }
+                }
+                self.sleep = Some(timer);
+                self.sleep_notice = None;
+                self.sleep_menu = false;
+            }
+            6 => {
+                self.cancel_sleep();
+                self.sleep_notice = Some("Timer dibatalkan".into());
+            }
+            _ => unreachable!(),
+        }
+        true
     }
 
     fn synced(&self) -> Option<&[Line]> {
@@ -354,10 +464,10 @@ impl MediaModule {
 fn icon_play(g: &Gfx, c: (f32, f32), playing: bool) {
     let (x, y) = c;
     if playing {
-        g.fill_rrect(Rect::new(x - 7.0, y - 8.0, 5.0, 16.0), 1.5, WHITE);
-        g.fill_rrect(Rect::new(x + 2.0, y - 8.0, 5.0, 16.0), 1.5, WHITE);
+        g.fill_rrect(Rect::new(x - 7.0, y - 8.0, 5.0, 16.0), 1.5, crate::theme::INK);
+        g.fill_rrect(Rect::new(x + 2.0, y - 8.0, 5.0, 16.0), 1.5, crate::theme::INK);
     } else {
-        g.polygon(&[(x - 5.0, y - 9.0), (x - 5.0, y + 9.0), (x + 9.0, y)], WHITE);
+        g.polygon(&[(x - 5.0, y - 9.0), (x - 5.0, y + 9.0), (x + 9.0, y)], crate::theme::INK);
     }
 }
 
@@ -388,7 +498,7 @@ impl Module for MediaModule {
     }
 
     fn active(&self) -> bool {
-        self.info.is_some()
+        self.info.is_some() || self.sleep.is_some() || self.shutdown_result.is_some()
     }
 
     fn wants_space(&self) -> bool {
@@ -405,12 +515,13 @@ impl Module for MediaModule {
     }
 
     fn expanded_size(&self) -> (f32, f32) {
-        if self.info.is_none() {
+        let extra = if self.sleep_menu { SLEEP_PANEL_H } else { 0.0 };
+        if self.info.is_none() && self.sleep.is_none() && !self.sleep_menu && self.shutdown_result.is_none() {
             (420.0, 80.0)
         } else if self.lyrics_on() {
-            (PLAYER_W + LYRICS_W, HEIGHT)
+            (PLAYER_W + LYRICS_W, HEIGHT + extra + 160.0)
         } else {
-            (PLAYER_W, HEIGHT)
+            (PLAYER_W, HEIGHT + extra)
         }
     }
 
@@ -458,43 +569,41 @@ impl Module for MediaModule {
     }
 
     fn draw_expanded(&mut self, g: &mut Gfx, r: Rect) {
+        if self.info.is_some() || self.sleep.is_some() || self.sleep_menu || self.shutdown_result.is_some() {
+            self.draw_sleep(g, r, layout(r).sleep);
+        }
         let Some(info) = self.info.clone() else {
-            g.text("Tidak ada musik yang diputar", r, 13.0, 400, DIM, Align::Center);
+            g.text("Tidak ada musik yang diputar", Rect::new(r.x, r.y, r.w, 80.0), 13.0, 400, DIM, Align::Center);
             return;
         };
-        let player = Rect::new(r.x, r.y, PLAYER_W.min(r.w), r.h);
+        let player = Rect::new(r.x, r.y, r.w, HEIGHT);
         let l = layout(player);
         self.art(g, l.art, 12.0);
 
         let title = if info.title.is_empty() { "Tanpa judul" } else { &info.title };
-        g.text(title, l.title, 15.0, 600, WHITE, Align::Left);
+        g.text(title, l.title, 22.0, 600, WHITE, Align::Left);
         g.text(&info.artist, l.artist, 12.5, 400, DIM, Align::Left);
 
         icon_skip(g, center(l.prev), false);
+        g.fill_rrect(l.play, 20.0, ACCENT);
         icon_play(g, center(l.play), info.playing);
         icon_skip(g, center(l.next), true);
         icon_lyrics(g, center(l.lyr), self.lyrics_on());
-        match &self.sleep {
-            Some(s) if s.restore_at.is_none() => {
-                let left = s.end.saturating_duration_since(Instant::now()).as_secs();
-                let t = format!("☾ {}:{:02}", left / 60, left % 60);
-                g.text(&t, l.sleep, 12.0, 600, ACCENT, Align::Right);
-            }
-            _ => g.text("☾ Tidur", l.sleep, 12.0, 400, DIM, Align::Right),
-        }
 
         let pos = info.position_now();
         if info.duration > 0.0 {
             let k = (pos / info.duration).clamp(0.0, 1.0) as f32;
             g.fill_rrect(l.bar, 2.0, FAINT);
-            g.fill_rrect(Rect::new(l.bar.x, l.bar.y, l.bar.w * k, l.bar.h), 2.0, WHITE);
+            g.fill_rrect(Rect::new(l.bar.x, l.bar.y, l.bar.w * k, l.bar.h), 2.0, ACCENT);
+            g.circle(l.bar.x + l.bar.w * k, l.bar.y + 2.0, 5.0, WHITE);
             g.text(&mmss(pos), l.times, 11.0, 400, DIM, Align::Left);
             let left = format!("-{}", mmss(info.duration - pos));
             g.text(&left, l.times, 11.0, 400, DIM, Align::Right);
         }
 
         if self.lyrics_on() {
-            let lr = Rect::new(r.x + PLAYER_W, r.y + 8.0, LYRICS_W - 20.0, r.h - 16.0);
+            let offset = HEIGHT + if self.sleep_menu { SLEEP_PANEL_H } else { 0.0 };
+            let lr = Rect::new(r.x + 24.0, r.y + offset, r.w - 48.0, (r.h - offset - 8.0).max(0.0));
             self.draw_lyrics(g, lr, pos);
         } else {
             self.line_hits.clear();
@@ -502,31 +611,16 @@ impl Module for MediaModule {
     }
 
     fn click(&mut self, r: Rect, x: f32, y: f32) -> bool {
+        if self.click_sleep(r, x, y) { return true; }
         let Some(info) = &self.info else { return false };
         let duration = info.duration;
-        let l = layout(Rect::new(r.x, r.y, PLAYER_W.min(r.w), r.h));
+        let l = layout(Rect::new(r.x, r.y, r.w, HEIGHT));
         if l.play.contains(x, y) {
             self.cmd.send(MediaCmd::PlayPause);
         } else if l.next.contains(x, y) {
             self.cmd.send(MediaCmd::Next);
         } else if l.prev.contains(x, y) {
             self.cmd.send(MediaCmd::Prev);
-        } else if l.sleep.contains(x, y) {
-            // Mati → 15 → 30 → 60 menit → mati.
-            let next = match &self.sleep {
-                None => Some(SLEEP_PRESETS[0]),
-                Some(s) => SLEEP_PRESETS.iter().copied().find(|&m| m > s.minutes),
-            };
-            if let Some(Sleep { fade_from: Some(v), .. }) = self.sleep.take() {
-                crate::system::set_master_volume(v);
-                crate::system::set_quiet(false);
-            }
-            self.sleep = next.map(|m| Sleep {
-                end: Instant::now() + Duration::from_secs(m as u64 * 60),
-                minutes: m,
-                fade_from: None,
-                restore_at: None,
-            });
         } else if l.lyr.contains(x, y) {
             {
                 let mut s = self.settings.borrow_mut();
@@ -590,6 +684,7 @@ impl Module for MediaModule {
     }
 
     fn poll_in(&self) -> Option<u32> {
+        if self.shutdown_result.is_some() { return Some(100); }
         let s = self.sleep.as_ref()?;
         let now = Instant::now();
         Some(match s.restore_at {
@@ -602,15 +697,34 @@ impl Module for MediaModule {
     }
 
     fn poll(&mut self) -> Poll {
+        if let Some(receiver) = &self.shutdown_result {
+            let result = match receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(_) => Some(Err("Worker shutdown terhenti".into())),
+            };
+            if let Some(result) = result {
+                self.shutdown_result = None;
+                self.sleep_notice = Some(match result {
+                    Ok(true) => "Permintaan shutdown dikirim ke Windows".into(),
+                    Ok(false) => "Simulasi selesai: perangkat tidak dimatikan".into(),
+                    Err(error) => format!("Shutdown gagal: {error}"),
+                });
+                self.sleep_menu = true;
+                return Poll::Alert;
+            }
+        }
         let Some(s) = &mut self.sleep else { return Poll::Idle };
         let now = Instant::now();
-        if let Some(t) = s.restore_at {
-            if now >= t {
-                if let Some(v) = s.fade_from {
-                    crate::system::set_master_volume(v);
+        if s.restore_at.is_some() {
+            if let Some(action) = s.finish_action(now) {
+                let shutdown = action == SleepAction::Shutdown;
+                self.cancel_sleep();
+                if shutdown {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.shutdown_result = Some(rx);
+                    std::thread::spawn(move || { let _ = tx.send(crate::power::shutdown()); });
                 }
-                crate::system::set_quiet(false);
-                self.sleep = None;
                 return Poll::Redraw;
             }
             return Poll::Idle;
@@ -620,13 +734,13 @@ impl Module for MediaModule {
             return Poll::Idle;
         }
         if s.fade_from.is_none() {
-            crate::system::set_quiet(true);
-            s.fade_from = crate::system::master_volume();
+            if !self.demo { crate::system::set_quiet(true); }
+            s.fade_from = if self.demo { Some(1.0) } else { crate::system::master_volume() };
         }
         let from = s.fade_from.unwrap_or(0.0);
-        crate::system::set_master_volume(from * (left.as_secs_f32() / FADE.as_secs_f32()));
+        if !self.demo { crate::system::set_master_volume(from * (left.as_secs_f32() / FADE.as_secs_f32())); }
         if left.is_zero() {
-            self.cmd.send(MediaCmd::Pause);
+            if !self.demo { self.cmd.send(MediaCmd::Pause); }
             // Tunggu musik benar-benar berhenti sebelum volume dikembalikan.
             s.restore_at = Some(now + Duration::from_millis(800));
         }
@@ -657,6 +771,38 @@ impl Module for MediaModule {
             (true, None) => Some(500),
             (false, Some(ms)) => Some(ms),
             (false, None) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod sleep_tests {
+    use super::*;
+
+    #[test]
+    fn action_runs_only_after_pause_restore_delay() {
+        let now = Instant::now();
+        for action in [SleepAction::Pause, SleepAction::Shutdown] {
+            let mut timer = Sleep::new(now, 15, action);
+            assert_eq!(timer.end.duration_since(now), Duration::from_secs(900));
+            assert_eq!(timer.finish_action(now + Duration::from_secs(901)), None);
+            timer.restore_at = Some(timer.end + Duration::from_millis(800));
+            assert_eq!(timer.finish_action(timer.end + Duration::from_millis(799)), None);
+            assert_eq!(timer.finish_action(timer.end + Duration::from_millis(800)), Some(action));
+        }
+    }
+
+    #[test]
+    fn sleep_controls_fit_narrow_panels_and_do_not_overlap() {
+        for width in [320.0, 456.0, 612.0] {
+            let buttons = sleep_buttons(Rect::new(0.0, 0.0, width, HEIGHT + SLEEP_PANEL_H));
+            for (i, a) in buttons.iter().enumerate() {
+                assert!(a.x >= 24.0 && a.x + a.w <= width - 23.9);
+                assert!(a.y >= HEIGHT && a.y + a.h < HEIGHT + SLEEP_PANEL_H);
+                for b in buttons.iter().skip(i + 1) {
+                    assert!(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y);
+                }
+            }
         }
     }
 }

@@ -8,6 +8,12 @@ pub struct Spring {
 const STIFFNESS: f32 = 340.0;
 const DAMPING: f32 = 30.0;
 
+/// Page resizing is not a close/open transition: keep foreground fully visible.
+pub fn expansion_progress(height: f32, compact: f32, expanded: f32, navigating: bool) -> f32 {
+    if navigating { 1.0 }
+    else { ((height - compact) / (expanded - compact).abs().max(1.0)).clamp(0.0, 1.0) }
+}
+
 impl Spring {
     pub fn new(v: f32) -> Self {
         Self { value: v, target: v, vel: 0.0 }
@@ -34,5 +40,24 @@ impl Spring {
             return false;
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_resize_keeps_content_visible_in_both_directions() {
+        for (from, to) in [(314.0, 206.0), (206.0, 314.0), (162.0, 314.0)] {
+            let mut height = Spring::new(from);
+            height.set(to);
+            for _ in 0..120 {
+                height.step(1.0 / 60.0);
+                assert_eq!(expansion_progress(height.value, 32.0, to, true), 1.0);
+            }
+        }
+        assert_eq!(expansion_progress(32.0, 32.0, 314.0, false), 0.0);
+        assert_eq!(expansion_progress(314.0, 32.0, 314.0, false), 1.0);
     }
 }

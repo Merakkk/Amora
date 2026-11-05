@@ -8,7 +8,13 @@ A living notch for the top edge of Windows. It shows your music with synced lyri
 a focus timer, water reminders, to-dos, your class schedule, a file shelf and more —
 then quietly gets out of the way.
 
-Native Rust + Direct2D, no web engine: about 30–40 MB of RAM and no CPU while idle.
+Native Rust + Direct2D, with Windows Composition for Prism Black glass and a software
+fallback. No web engine. Drawing is event driven; memory usage depends on the graphics backend.
+
+Prism Black uses icon-only navigation without tab tooltips. Open the gear icon to adjust
+transparency and blur, or restore the appearance defaults. Text and controls retain a
+separate contrast surface. Native blur requires a supported Windows compositor; the
+software fallback disables the blur control and explains why. Older settings remain compatible.
 
 ## Install
 
@@ -26,13 +32,15 @@ Requires Windows 10 (1809+) or Windows 11, 64-bit.
 
 ## Features
 
-Hover the notch to open it; scroll or click the page names to switch pages.
+Hover the notch to open it; scroll or click the page icons to switch pages.
+With auto-hide enabled above another app, approaching from below or either side
+hides the notch to expose the app behind it. Use the monitor's top edge to open Amora.
 
 | Page | What it does |
 |---|---|
 | **Music** | Any player (Spotify, YouTube in the browser, …): cover art, play/pause/skip, seek. |
 | | **Smart lyrics** from [LRCLIB](https://lrclib.net), synced line by line. YouTube-style titles (`Artist - Song (Official Video)`, VEVO / "- Topic" channels) are cleaned up so lyrics are found even for music videos. Re-search, per-song timing offset, click a line to jump. |
-| | Sleep timer (15/30/60 min): fades the volume out, pauses, restores the volume. |
+| | Sleep timer (15/30/60 min): fades out, pauses, restores volume; optional device shutdown. |
 | **Focus** | Pomodoro timer; the countdown stays visible in the closed notch. |
 | **Water** | Log what you drink, hourly chart, reminders during your active hours. |
 | **To-do** | Type straight into the notch; end with `@14:30` for a reminder. |

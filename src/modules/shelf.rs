@@ -19,7 +19,7 @@ use crate::gfx::{Align, Color, Gfx, Rect, DIM, FAINT, WHITE};
 use crate::settings::{load_json, save_json};
 
 const FILE: &str = "shelf.json";
-const ACCENT: Color = Color(0.35, 0.72, 1.0, 1.0);
+const ACCENT: Color = crate::theme::ACCENT;
 const MAX_TILES: usize = 5;
 const TILE_W: f32 = 76.0;
 /// Thumbnail selesai dibuat di thread latar; gambar ulang bila Shelf sedang terlihat.

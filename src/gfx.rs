@@ -42,10 +42,9 @@ impl Rect {
 #[derive(Clone, Copy)]
 pub struct Color(pub f32, pub f32, pub f32, pub f32);
 
-pub const WHITE: Color = Color(1.0, 1.0, 1.0, 1.0);
-pub const BLACK: Color = Color(0.0, 0.0, 0.0, 1.0);
-pub const DIM: Color = Color(1.0, 1.0, 1.0, 0.55);
-pub const FAINT: Color = Color(1.0, 1.0, 1.0, 0.18);
+pub const WHITE: Color = Color(0.95, 0.95, 0.98, 1.0);
+pub const DIM: Color = Color(0.69, 0.71, 0.78, 1.0);
+pub const FAINT: Color = Color(0.27, 0.28, 0.32, 1.0);
 
 /// Jenis format teks yang di-cache.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,6 +65,8 @@ pub enum Align {
 }
 
 pub struct Gfx {
+    pub backdrop: Option<crate::composition::Backdrop>,
+    pub backdrop_error: Option<String>,
     d2d: ID2D1Factory,
     dw: IDWriteFactory,
     pub wic: IWICImagingFactory,
@@ -94,6 +95,8 @@ impl Gfx {
             let mem_dc = CreateCompatibleDC(None);
             let (dib, old) = Self::make_dib(mem_dc, px_w, px_h)?;
             Ok(Self {
+                backdrop: None,
+                backdrop_error: None,
                 d2d,
                 dw,
                 wic,
@@ -181,7 +184,24 @@ impl Gfx {
     }
 
     /// Selesai menggambar dan tampilkan ke jendela pada posisi layar `pos` (piksel).
-    pub fn end(&mut self, hwnd: HWND, pos: POINT) -> Result<()> {
+    pub fn enable_backdrop(&mut self, hwnd: HWND) {
+        if std::env::var_os("AMORA_SOFTWARE").is_some() {
+            self.backdrop_error = Some("Mode software: blur tidak tersedia".into());
+            return;
+        }
+        match crate::composition::Backdrop::new(hwnd) {
+            Ok(backdrop) => {
+                crate::crashlog::write("Prism: backdrop dan Gaussian blur native siap");
+                self.backdrop = Some(backdrop);
+            }
+            Err(error) => {
+                crate::crashlog::write(&format!("Prism: fallback software, {error:?}"));
+                self.backdrop_error = Some(format!("Blur tidak tersedia: {}", error.message()));
+            }
+        }
+    }
+
+    pub fn end(&mut self, hwnd: HWND, pos: POINT, island: Rect, blur: u32) -> Result<()> {
         unsafe {
             if let Err(e) = self.rt.EndDraw(None, None) {
                 if e.code() == D2DERR_RECREATE_TARGET {
@@ -189,6 +209,17 @@ impl Gfx {
                     self.generation += 1;
                 }
                 return Err(e);
+            }
+            if let Some(backdrop) = &mut self.backdrop {
+                match backdrop.present(hwnd, pos, (self.px_w, self.px_h), island, self.scale, blur) {
+                    Ok(()) => {},
+                    Err(error) => {
+                        crate::crashlog::write(&format!("Prism: present gagal, {error:?}"));
+                        self.backdrop_error = Some(format!("Blur terhenti; memakai software ({:?})", error.code()));
+                        self.backdrop = None;
+                        let _ = PostMessageW(hwnd, WM_PAINT, WPARAM(0), LPARAM(0));
+                    }
+                }
             }
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -233,6 +264,21 @@ impl Gfx {
         }
     }
 
+    pub fn glass(&self, r: Rect, radius: f32, opacity: f32) {
+        let stops = [
+            D2D1_GRADIENT_STOP { position: 0.0, color: self.color(Color(0.125, 0.13, 0.15, opacity)) },
+            D2D1_GRADIENT_STOP { position: 0.55, color: self.color(Color(0.035, 0.04, 0.05, opacity)) },
+            D2D1_GRADIENT_STOP { position: 1.0, color: self.color(Color(0.075, 0.078, 0.095, opacity)) },
+        ];
+        unsafe {
+            let Ok(collection) = self.rt.CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP) else { return };
+            let Ok(brush) = self.rt.CreateLinearGradientBrush(&D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: D2D_POINT_2F { x: r.x, y: r.y }, endPoint: D2D_POINT_2F { x: r.x + r.w, y: r.y + r.h },
+            }, None, &collection) else { return };
+            self.rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: r.d2d(), radiusX: radius, radiusY: radius }, &brush);
+        }
+    }
+
     pub fn polygon(&self, pts: &[(f32, f32)], c: Color) {
         let Some(b) = self.brush(c) else { return };
         unsafe {
@@ -245,6 +291,16 @@ impl Gfx {
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);
             if sink.Close().is_ok() {
                 self.rt.FillGeometry(&geo, &b, None);
+            }
+        }
+    }
+
+    pub fn polyline(&self, pts: &[(f32, f32)], width: f32, c: Color) {
+        let Some(brush) = self.brush(c) else { return };
+        unsafe {
+            for pair in pts.windows(2) {
+                self.rt.DrawLine(D2D_POINT_2F { x: pair[0].0, y: pair[0].1 },
+                    D2D_POINT_2F { x: pair[1].0, y: pair[1].1 }, &brush, width, None);
             }
         }
     }

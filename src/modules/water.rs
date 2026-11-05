@@ -7,7 +7,7 @@ use crate::gfx::{Align, Color, Gfx, Rect, DIM, FAINT, WHITE};
 use crate::settings::{load_json, save_json, SharedSettings};
 use crate::time::{day, minute_of_day, now_ms, MIN};
 
-const BLUE: Color = Color(0.36, 0.72, 1.0, 1.0);
+const BLUE: Color = crate::theme::ACCENT;
 const FILE: &str = "water.json";
 
 #[derive(Serialize, Deserialize, Default)]

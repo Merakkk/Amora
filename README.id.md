@@ -29,6 +29,41 @@ Klik kanan notch atau klik ikon Amora di tray untuk menu: **Mulai bersama Window
 
 ## Monitor dan Kontrol
 
+### Tampilan Prism Black
+
+Navigasi memakai ikon saja, tanpa nama tab atau tooltip. Pilih ikon roda gigi untuk
+**Tampilan**: atur transparansi 0–100% dan kekuatan blur 0–48. Perubahan langsung
+terlihat dan disimpan setelah slider dilepas. Tombol **Pulihkan tampilan awal**
+tersedia di halaman Tampilan dan menu tray; data serta pilihan monitor tetap disimpan.
+
+Saat tertutup, notch berupa kapsul hitam solid yang mengambang 6 DIP dari tepi atas,
+tanpa bingkai kaca ganda. Pengaturan material kaca berlaku saat panel terbuka.
+Ikon navigasi berukuran 15 DIP dengan tombol visual 32 DIP dan jarak pusat 54 DIP.
+Ada celah 12 DIP antara panel isi dan bilah navigasi. Jika otomatis sembunyikan
+aktif dan ada aplikasi di belakang notch, kursor dari bawah atau samping membuat
+notch menyingkir agar tab aplikasi dapat diakses. Untuk membuka Amora pada keadaan
+itu, dorong kursor ke tepi paling atas layar pada posisi notch. Di desktop kosong
+atau saat otomatis sembunyikan nonaktif, hover kapsul normal tetap membuka panel.
+Saat berpindah ke halaman yang lebih pendek, panel tetap terbuka meski posisi ikon
+naik melewati kursor. Masuk ke panel baru untuk melanjutkan, atau keluar dari area
+panel sebelumnya untuk menutupnya.
+Mode minimal tetap berupa garis 5 DIP. Untuk membukanya, dorong kursor mentok ke
+tepi paling atas layar pada posisi notch dan tahan sebentar. Lewat di bawah tepi
+tersebut tidak membuka panel. Setelah terbuka, kursor bisa bergerak turun ke kontrol.
+
+Material memakai Windows Composition bila tersedia. Nilai blur nol menampilkan kaca
+jernih. Jika backend tidak tersedia, aplikasi memakai renderer software dan slider
+blur dinonaktifkan dengan keterangan. Teks dan kontrol memiliki lapisan kontras
+tersendiri agar tetap terbaca saat kaca transparan. Setelan lama tetap dapat dimuat.
+
+Opsi aplikasi sebelumnya ada dalam kelompok **Umum**, **Fokus**, dan **Pengingat minum**.
+Preview terisolasi dapat dijalankan dengan `amora --preview-prism Setelan` (atau nama
+halaman lain). `AMORA_SOFTWARE=1` memaksa fallback untuk pengujian. Preview menyimpan
+data dalam `amora-preview-data` di samping executable.
+Gunakan `amora --preview-hover Musik` untuk menguji hover tanpa memaksa panel terbuka.
+
+### Pemindahan monitor dan perangkat
+
 Buka notch, lalu seret pegangan kecil di bagian tengah atas ke monitor tujuan.
 Saat dilepas, notch menempel di tengah atas monitor itu dan mengingat pilihan setelah restart.
 Escape membatalkan seret. Jika monitor dilepas, notch memakai monitor utama sementara;
@@ -95,7 +130,7 @@ Untuk pengembangan:
 - [x] Musik: judul, artis, sampul, putar/jeda/lompat, progress + seek
 - [x] Lirik pintar: LRCLIB, judul YouTube/VEVO/Topic dibersihkan, cache di `%LOCALAPPDATA%\Amora\lyrics`
 - [x] Ikon tray + menu, mulai bersama Windows
-- [x] Halaman (Musik · Fokus · Minum · To-do · Jadwal · Shelf · Clipboard): klik nama halaman atau scroll
+- [x] Halaman (Musik · Fokus · Minum · To-do · Jadwal · Shelf · Clipboard · Kontrol · Setelan): klik ikon halaman atau scroll
 - [x] Fokus (Pomodoro), sisa waktu tampil di notch tertutup
 - [x] Minum: catat, grafik per jam, pengingat di jam aktif
 - [x] To-do: ketik di notch, `@14:30` untuk pengingat
@@ -107,7 +142,7 @@ Untuk pengembangan:
 - [x] Mode notch minimal: garis tipis, tetap muncul penuh untuk lirik dan notifikasi
 - [x] Indikator mic (oranye) / kamera (hijau) + notifikasi nama aplikasinya
 - [x] Screenshot baru otomatis masuk Shelf
-- [x] Sleep timer musik 15/30/60 menit, volume memudar 10 detik lalu musik dijeda
+- [x] Sleep timer musik 15/30/60 menit, volume memudar 10 detik lalu musik dijeda; pilihan shutdown perangkat
 - [x] Jadwal kuliah mingguan: ketik `Senin 08:00-09:40 Basis Data @R301`, pengingat 10 menit sebelum kelas, hitung mundur di notch tertutup
 - [x] Halaman Setelan di notch (semua pilihan, langsung berlaku)
 - [x] Lirik: cari ulang, geser waktu per lagu, animasi pergantian baris, baris panjang dibungkus
@@ -117,6 +152,23 @@ Untuk pengembangan:
 
 ## Setelan
 
+### Timer tidur dan shutdown
+
+Di halaman Musik, klik **Tidur**, pilih **15 / 30 / 60 menit**, lalu pilih
+**Musik saja** atau **Musik + shutdown** dan tekan **Mulai timer**. Buka kembali
+panel Tidur untuk membatalkan atau memulai ulang. Pilihan bawaan adalah Musik saja.
+
+Ketika timer selesai, musik dijeda dan volume dipulihkan. Untuk pilihan shutdown,
+Amora kemudian mengirim permintaan shutdown biasa ke Windows melalui worker.
+Aplikasi tidak dipaksa tutup; pekerjaan yang belum disimpan atau kebijakan perangkat
+dapat menghalangi shutdown. Lihat [dokumentasi shutdown Windows](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/shutdown).
+Timer berjalan hanya selama Amora tetap terbuka dan tidak disimpan untuk restart.
+Mode preview menyimulasikan shutdown. Dengan musik demo, fade dan pause juga tidak
+mengubah audio perangkat. `AMORA_TEST_SLEEP_SECONDS=15` mempercepat timer khusus
+preview dengan musik demo untuk pengujian lokal.
+
+### Pilihan aplikasi
+
 Semua bisa diubah di halaman **Setelan** pada notch. Tersimpan di `%LOCALAPPDATA%\Amora\settings.json`:
 
 - `tidy_tables`: rapikan tabel yang disalin (default `true`)
@@ -125,6 +177,7 @@ Semua bisa diubah di halaman **Setelan** pada notch. Tersimpan di `%LOCALAPPDATA
 - `mascot`, `minimal`: juga bisa diubah lewat menu tray
 - `auto_hide`: notch minggir saat kursor mengarah ke jendela di belakangnya (default `true`)
 - `monitor`: identitas monitor pilihan, atau `null` untuk monitor utama
+- `appearance`: `transparency` (0–100, default 80) dan `blur` (0–48, default 24)
 - `pomodoro`: `focus_min`, `short_break_min`, `long_break_min`, `rounds`
 - `water`: `goal_ml`, `sip_ml`, `remind`, `interval_min`, `start_hour`, `end_hour`
 
